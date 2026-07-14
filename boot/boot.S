@@ -11,15 +11,10 @@ multiboot_header:
     .long multiboot_header_end - multiboot_header
     .long -(0xE85250D6 + 0 + (multiboot_header_end - multiboot_header))
     .align 8
-    .word 5
-    .word 0
-    .long 20
-    .long 0
-    .long 0
-    .long 0
+    .long 5
+    .long 8
     .align 8
-    .word 0
-    .word 0
+    .long 0
     .long 8
 multiboot_header_end:
 

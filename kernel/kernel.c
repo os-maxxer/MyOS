@@ -42,6 +42,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     graphics_init(multiboot_info);
     if (graphics_is_ready()) {
+        console_write("Framebuffer ready.\n");
         desktop_init();
         desktop_redraw();
         app_notepad_show();

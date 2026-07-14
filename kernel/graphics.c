@@ -8,12 +8,38 @@
 #include <stddef.h>
 
 static struct framebuffer_info framebuffer = {0};
-static uint32_t *framebuffer_pixels = 0;
+static uint8_t *framebuffer_data = 0;
 static uint32_t framebuffer_width = 0;
 static uint32_t framebuffer_height = 0;
-static uint32_t framebuffer_pitch = 0;
 
 static uint32_t bg_color = 0xFF1B1B1B;
+
+static void framebuffer_set_pixel(uint32_t x, uint32_t y, uint32_t color) {
+    if (!framebuffer.present || x >= framebuffer_width || y >= framebuffer_height) {
+        return;
+    }
+
+    uint8_t *pixel = framebuffer_data + y * framebuffer.pitch + x * framebuffer.bytes_per_pixel;
+    switch (framebuffer.bytes_per_pixel) {
+        case 4:
+            *(uint32_t *)pixel = color;
+            break;
+        case 3:
+            pixel[0] = (uint8_t)(color & 0xFF);
+            pixel[1] = (uint8_t)((color >> 8) & 0xFF);
+            pixel[2] = (uint8_t)((color >> 16) & 0xFF);
+            break;
+        case 2:
+            pixel[0] = (uint8_t)(color & 0xFF);
+            pixel[1] = (uint8_t)((color >> 8) & 0xFF);
+            break;
+        case 1:
+            pixel[0] = (uint8_t)(color & 0xFF);
+            break;
+        default:
+            break;
+    }
+}
 
 static void *get_multiboot_tag(uint32_t multiboot_info, uint32_t type) {
     uint32_t *info = (uint32_t *)multiboot_info;
@@ -51,10 +77,9 @@ void graphics_init(uint32_t multiboot_info) {
     framebuffer.bpp = framebuffer_tag->common.framebuffer_bpp;
     framebuffer.bytes_per_pixel = framebuffer.bpp / 8;
     framebuffer.present = true;
-    framebuffer_pixels = (uint32_t *)framebuffer.address;
+    framebuffer_data = (uint8_t *)framebuffer.address;
     framebuffer_width = framebuffer.width;
     framebuffer_height = framebuffer.height;
-    framebuffer_pitch = framebuffer.pitch / 4;
 }
 
 bool graphics_is_ready(void) {
@@ -68,22 +93,19 @@ void graphics_clear(uint32_t color) {
     bg_color = color;
     for (uint32_t y = 0; y < framebuffer_height; ++y) {
         for (uint32_t x = 0; x < framebuffer_width; ++x) {
-            framebuffer_pixels[y * framebuffer_pitch + x] = color;
+            framebuffer_set_pixel(x, y, color);
         }
     }
 }
 
 void graphics_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
-    if (!framebuffer.present || x >= framebuffer_width || y >= framebuffer_height) {
-        return;
-    }
-    framebuffer_pixels[y * framebuffer_pitch + x] = color;
+    framebuffer_set_pixel(x, y, color);
 }
 
 void graphics_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
     for (uint32_t row = y; row < y + height && row < framebuffer_height; ++row) {
         for (uint32_t col = x; col < x + width && col < framebuffer_width; ++col) {
-            framebuffer_pixels[row * framebuffer_pitch + col] = color;
+            framebuffer_set_pixel(col, row, color);
         }
     }
 }
