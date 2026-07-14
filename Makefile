@@ -8,6 +8,10 @@ LDFLAGS ?= -m elf_i386 -T linker.ld -nostdlib -z noexecstack
 BUILD_DIR := build
 BOOT_DIR := boot
 KERNEL_DIR := kernel
+GUI_DIR := gui
+WINDOW_MANAGER_DIR := window_manager
+DESKTOP_DIR := desktop
+APPS_DIR := apps
 
 OBJS := \
 	$(BUILD_DIR)/boot/boot.o \
@@ -20,12 +24,16 @@ OBJS := \
 	$(BUILD_DIR)/kernel/keyboard.o \
 	$(BUILD_DIR)/kernel/mouse.o \
 	$(BUILD_DIR)/kernel/graphics.o \
+	$(BUILD_DIR)/gui/gui.o \
+	$(BUILD_DIR)/window_manager/window_manager.o \
+	$(BUILD_DIR)/desktop/desktop.o \
+	$(BUILD_DIR)/apps/notepad.o \
 	$(BUILD_DIR)/kernel/arch/i386/interrupts.o
 
 all: $(BUILD_DIR)/myos.iso
 
 $(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)/boot $(BUILD_DIR)/kernel/arch/i386
+	mkdir -p $(BUILD_DIR)/boot $(BUILD_DIR)/kernel/arch/i386 $(BUILD_DIR)/gui $(BUILD_DIR)/window_manager $(BUILD_DIR)/desktop $(BUILD_DIR)/apps
 
 $(BUILD_DIR)/boot/boot.o: $(BOOT_DIR)/boot.S | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -55,6 +63,18 @@ $(BUILD_DIR)/kernel/mouse.o: $(KERNEL_DIR)/mouse.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/graphics.o: $(KERNEL_DIR)/graphics.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gui/gui.o: $(GUI_DIR)/gui.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/window_manager/window_manager.o: $(WINDOW_MANAGER_DIR)/window_manager.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/desktop/desktop.o: $(DESKTOP_DIR)/desktop.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apps/notepad.o: $(APPS_DIR)/notepad.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/arch/i386/interrupts.o: $(KERNEL_DIR)/arch/i386/interrupts.asm | $(BUILD_DIR)

@@ -10,6 +10,9 @@
 #include <myos/keyboard.h>
 #include <myos/mouse.h>
 #include <myos/graphics.h>
+#include <myos/window_manager.h>
+#include <myos/desktop.h>
+#include <myos/apps/notepad.h>
 
 void __attribute__((noreturn)) kernel_panic(const char *message) {
     console_clear();
@@ -39,12 +42,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     graphics_init(multiboot_info);
     if (graphics_is_ready()) {
-        graphics_clear(0xFF1B1B1B);
-        graphics_fill_rect(40, 40, 220, 120, 0xFF4A90E2);
-        graphics_draw_rect(40, 40, 220, 120, 0xFF2D5AA8);
-        graphics_draw_string(60, 70, "MyOS Milestone 2", 0xFFFFFFFF);
-        graphics_draw_string(60, 92, "Framebuffer active", 0xFFEDEDED);
-        graphics_draw_mouse_cursor(120, 140, 0xFFFFFFFF);
+        desktop_init();
+        desktop_redraw();
+        app_notepad_show();
     } else {
         console_write("Framebuffer unavailable.\n");
     }
