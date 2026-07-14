@@ -17,6 +17,10 @@ static uint32_t bg_color = 0xFF1B1B1B;
 
 static void *get_multiboot_tag(uint32_t multiboot_info, uint32_t type) {
     uint32_t *info = (uint32_t *)multiboot_info;
+    if (info == 0) {
+        return 0;
+    }
+
     uint32_t total_size = info[0];
     uint8_t *ptr = (uint8_t *)(info + 1);
     while ((uint32_t)(ptr - (uint8_t *)info) < total_size) {
@@ -25,6 +29,9 @@ static void *get_multiboot_tag(uint32_t multiboot_info, uint32_t type) {
         if (tag_type == type) {
             return ptr;
         }
+        if (tag_type == 0) {
+            break;
+        }
         ptr += (tag_size + 7) & ~7U;
     }
     return 0;
@@ -32,7 +39,7 @@ static void *get_multiboot_tag(uint32_t multiboot_info, uint32_t type) {
 
 void graphics_init(uint32_t multiboot_info) {
     struct multiboot_tag_framebuffer *framebuffer_tag = (struct multiboot_tag_framebuffer *)get_multiboot_tag(multiboot_info, 8);
-    if (framebuffer_tag == 0) {
+    if (framebuffer_tag == 0 || framebuffer_tag->common.framebuffer_addr == 0) {
         framebuffer.present = false;
         return;
     }

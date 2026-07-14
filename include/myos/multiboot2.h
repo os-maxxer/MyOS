@@ -4,7 +4,7 @@
 #include <myos/types.h>
 
 struct multiboot_tag_framebuffer_common {
-    uint32_t framebuffer_addr;
+    uint64_t framebuffer_addr;
     uint32_t framebuffer_pitch;
     uint32_t framebuffer_width;
     uint32_t framebuffer_height;
