@@ -15,6 +15,11 @@ OBJS := \
 	$(BUILD_DIR)/kernel/console.o \
 	$(BUILD_DIR)/kernel/gdt.o \
 	$(BUILD_DIR)/kernel/idt.o \
+	$(BUILD_DIR)/kernel/ports.o \
+	$(BUILD_DIR)/kernel/pic.o \
+	$(BUILD_DIR)/kernel/keyboard.o \
+	$(BUILD_DIR)/kernel/mouse.o \
+	$(BUILD_DIR)/kernel/graphics.o \
 	$(BUILD_DIR)/kernel/arch/i386/interrupts.o
 
 all: $(BUILD_DIR)/myos.iso
@@ -35,6 +40,21 @@ $(BUILD_DIR)/kernel/gdt.o: $(KERNEL_DIR)/gdt.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/idt.o: $(KERNEL_DIR)/idt.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/ports.o: $(KERNEL_DIR)/ports.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/pic.o: $(KERNEL_DIR)/pic.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/keyboard.o: $(KERNEL_DIR)/keyboard.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/mouse.o: $(KERNEL_DIR)/mouse.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/graphics.o: $(KERNEL_DIR)/graphics.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/arch/i386/interrupts.o: $(KERNEL_DIR)/arch/i386/interrupts.asm | $(BUILD_DIR)

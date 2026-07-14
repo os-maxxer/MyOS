@@ -6,6 +6,10 @@
 #include <myos/console.h>
 #include <myos/gdt.h>
 #include <myos/idt.h>
+#include <myos/pic.h>
+#include <myos/keyboard.h>
+#include <myos/mouse.h>
+#include <myos/graphics.h>
 
 void __attribute__((noreturn)) kernel_panic(const char *message) {
     console_clear();
@@ -30,8 +34,33 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     gdt_init();
     idt_init();
 
-    console_write("Kernel ready.\n");
+    pic_remap();
+    console_write("PIC remapped.\n");
+
+    graphics_init(multiboot_info);
+    if (graphics_is_ready()) {
+        graphics_clear(0xFF1B1B1B);
+        graphics_fill_rect(40, 40, 220, 120, 0xFF4A90E2);
+        graphics_draw_rect(40, 40, 220, 120, 0xFF2D5AA8);
+        graphics_draw_string(60, 70, "MyOS Milestone 2", 0xFFFFFFFF);
+        graphics_draw_string(60, 92, "Framebuffer active", 0xFFEDEDED);
+        graphics_draw_mouse_cursor(120, 140, 0xFFFFFFFF);
+    } else {
+        console_write("Framebuffer unavailable.\n");
+    }
+
+    keyboard_init();
+    mouse_init();
+
+    console_write("Keyboard and mouse ready.\n");
+
     for (;;) {
+        if (keyboard_has_input()) {
+            char key = 0;
+            if (keyboard_read_char(&key)) {
+                console_putc(key);
+            }
+        }
         __asm__ volatile("hlt");
     }
 }
