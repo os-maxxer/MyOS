@@ -3,7 +3,7 @@
  * This provides a simple VGA text console for milestone 1 output.
  */
 
-#include <myos/console.h>
+#include <nyx/console.h>
 
 static uint16_t *video_memory = (uint16_t *)0xB8000;
 static uint8_t cursor_row = 0;

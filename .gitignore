@@ -1,0 +1,5 @@
+build/
+serial.log
+*.o
+*.iso
+*.kernel

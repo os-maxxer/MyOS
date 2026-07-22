@@ -2,8 +2,8 @@
  * Window manager facade for Milestone 3.
  */
 
-#include <myos/window_manager.h>
-#include <myos/gui.h>
+#include <nyx/window_manager.h>
+#include <nyx/gui.h>
 
 void window_manager_init(void) {
     gui_init();

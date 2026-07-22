@@ -2,8 +2,8 @@
  * Programmable interrupt controller setup.
  */
 
-#include <myos/pic.h>
-#include <myos/ports.h>
+#include <nyx/pic.h>
+#include <nyx/ports.h>
 
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA 0x21

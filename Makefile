@@ -1,7 +1,7 @@
 CC ?= gcc
 CFLAGS ?= -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -O2 -Iinclude
-AS := /usr/bin/nasm
-ASFLAGS := -f elf32
+AS := gcc
+ASFLAGS := -m32 -c -x assembler-with-cpp
 LD ?= ld
 LDFLAGS ?= -m elf_i386 -T linker.ld -nostdlib -z noexecstack
 
@@ -24,13 +24,18 @@ OBJS := \
 	$(BUILD_DIR)/kernel/keyboard.o \
 	$(BUILD_DIR)/kernel/mouse.o \
 	$(BUILD_DIR)/kernel/graphics.o \
+	$(BUILD_DIR)/kernel/timer.o \
+	$(BUILD_DIR)/kernel/apic.o \
+	$(BUILD_DIR)/kernel/ramfs.o \
 	$(BUILD_DIR)/gui/gui.o \
 	$(BUILD_DIR)/window_manager/window_manager.o \
 	$(BUILD_DIR)/desktop/desktop.o \
 	$(BUILD_DIR)/apps/notepad.o \
+	$(BUILD_DIR)/apps/terminal.o \
+	$(BUILD_DIR)/apps/paint.o \
 	$(BUILD_DIR)/kernel/arch/i386/interrupts.o
 
-all: $(BUILD_DIR)/myos.iso
+all: $(BUILD_DIR)/nyx.iso
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)/boot $(BUILD_DIR)/kernel/arch/i386 $(BUILD_DIR)/gui $(BUILD_DIR)/window_manager $(BUILD_DIR)/desktop $(BUILD_DIR)/apps
@@ -65,6 +70,15 @@ $(BUILD_DIR)/kernel/mouse.o: $(KERNEL_DIR)/mouse.c | $(BUILD_DIR)
 $(BUILD_DIR)/kernel/graphics.o: $(KERNEL_DIR)/graphics.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kernel/timer.o: $(KERNEL_DIR)/timer.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/ramfs.o: $(KERNEL_DIR)/ramfs.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/apic.o: $(KERNEL_DIR)/apic.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/gui/gui.o: $(GUI_DIR)/gui.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -77,20 +91,32 @@ $(BUILD_DIR)/desktop/desktop.o: $(DESKTOP_DIR)/desktop.c | $(BUILD_DIR)
 $(BUILD_DIR)/apps/notepad.o: $(APPS_DIR)/notepad.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/apps/terminal.o: $(APPS_DIR)/terminal.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apps/paint.o: $(APPS_DIR)/paint.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel/arch/i386/interrupts.o: $(KERNEL_DIR)/arch/i386/interrupts.asm | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) -o $@ $<
 
-$(BUILD_DIR)/myos.kernel: $(OBJS)
+$(BUILD_DIR)/nyx.kernel: $(OBJS)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
-$(BUILD_DIR)/myos.iso: $(BUILD_DIR)/myos.kernel boot/grub/grub.cfg
+$(BUILD_DIR)/nyx.iso: $(BUILD_DIR)/nyx.kernel boot/grub/grub.cfg
 	mkdir -p $(BUILD_DIR)/isofiles/boot/grub
-	cp $(BUILD_DIR)/myos.kernel $(BUILD_DIR)/isofiles/boot/myos.kernel
+	cp $(BUILD_DIR)/nyx.kernel $(BUILD_DIR)/isofiles/boot/nyx.kernel
 	cp boot/grub/grub.cfg $(BUILD_DIR)/isofiles/boot/grub/grub.cfg
 	grub-mkrescue -o $@ $(BUILD_DIR)/isofiles >/dev/null 2>&1
 
-run: $(BUILD_DIR)/myos.iso
-	qemu-system-i386 -cdrom $(BUILD_DIR)/myos.iso -serial stdio
+run: $(BUILD_DIR)/nyx.iso
+	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso
+
+run-serial: $(BUILD_DIR)/nyx.iso
+	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso -serial file:serial.log
+
+run-nographic: $(BUILD_DIR)/nyx.iso
+	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso -nographic
 
 clean:
 	rm -rf $(BUILD_DIR)

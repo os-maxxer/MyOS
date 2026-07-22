@@ -2,9 +2,9 @@
  * Interrupt descriptor table setup and common interrupt handling.
  */
 
-#include <myos/idt.h>
-#include <myos/console.h>
-#include <myos/interrupts.h>
+#include <nyx/idt.h>
+#include <nyx/console.h>
+#include <nyx/interrupts.h>
 
 struct idt_entry {
     uint16_t base_low;
@@ -141,8 +141,16 @@ void idt_init(void) {
     load_idt((uint32_t)&idtp);
 }
 
+static void (*irq_handlers[16])(void) = {0};
+
 void isr_handler_register(uint8_t vector, void (*handler)(void)) {
     idt_set_gate(vector, (uint32_t)handler, 0x08, 0x8E);
+}
+
+void irq_register_handler(uint8_t irq, void (*handler)(void)) {
+    if (irq < 16) {
+        irq_handlers[irq] = handler;
+    }
 }
 
 void __attribute__((cdecl)) isr_common_handler(struct registers *regs) {
@@ -154,6 +162,9 @@ void __attribute__((cdecl)) isr_common_handler(struct registers *regs) {
 }
 
 void __attribute__((cdecl)) irq_common_handler(struct registers *regs) {
-    (void)regs;
+    uint8_t irq = regs->int_no - 32;
+    if (irq < 16 && irq_handlers[irq]) {
+        irq_handlers[irq]();
+    }
 }
 
