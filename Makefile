@@ -28,6 +28,7 @@ OBJS := \
 	$(BUILD_DIR)/kernel/apic.o \
 	$(BUILD_DIR)/kernel/ramfs.o \
 	$(BUILD_DIR)/gui/gui.o \
+	$(BUILD_DIR)/gui/login.o \
 	$(BUILD_DIR)/window_manager/window_manager.o \
 	$(BUILD_DIR)/desktop/desktop.o \
 	$(BUILD_DIR)/apps/notepad.o \
@@ -80,6 +81,9 @@ $(BUILD_DIR)/kernel/apic.o: $(KERNEL_DIR)/apic.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/gui/gui.o: $(GUI_DIR)/gui.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gui/login.o: $(GUI_DIR)/login.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/window_manager/window_manager.o: $(WINDOW_MANAGER_DIR)/window_manager.c | $(BUILD_DIR)

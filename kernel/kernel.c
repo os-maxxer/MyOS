@@ -8,6 +8,7 @@
 #include <nyx/window_manager.h>
 #include <nyx/desktop.h>
 #include <nyx/gui.h>
+#include <nyx/login.h>
 #include <nyx/timer.h>
 #include <nyx/ramfs.h>
 #include <nyx/apps/notepad.h>
@@ -47,8 +48,6 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     graphics_init(multiboot_info);
     if (graphics_is_ready()) {
         console_write("Framebuffer ready.\n");
-        desktop_init();
-        desktop_redraw();
     } else {
         console_write("Framebuffer unavailable.\n");
     }
@@ -62,6 +61,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     console_write("Keyboard, mouse, timer, RAMFS ready.\n");
 
     __asm__ volatile("sti");
+
+    if (graphics_is_ready()) {
+        login_screen();
+        desktop_init();
+        desktop_redraw();
+    }
 
     uint32_t last_redraw = 0;
 
