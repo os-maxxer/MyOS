@@ -10,7 +10,22 @@
 
 static int mouse_x = 512;
 static int mouse_y = 384;
+static int prev_mx = -1;
+static int prev_my = -1;
+static uint32_t cursor_bg[256];
 static int btn_rect[4];
+
+static void save_cursor_bg(int x, int y) {
+    for (int r = 0; r < 16; r++)
+        for (int c = 0; c < 16; c++)
+            cursor_bg[r * 16 + c] = graphics_get_pixel(x + c, y + r);
+}
+
+static void restore_cursor_bg(int x, int y) {
+    for (int r = 0; r < 16; r++)
+        for (int c = 0; c < 16; c++)
+            graphics_put_pixel(x + c, y + r, cursor_bg[r * 16 + c]);
+}
 
 static uint32_t lerp_color(uint32_t c1, uint32_t c2, int t, int max) {
     uint8_t r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
@@ -109,16 +124,20 @@ void login_screen(void) {
     draw_stars();
     draw_panel();
 
+    save_cursor_bg(mouse_x, mouse_y);
+    draw_mouse();
+    prev_mx = mouse_x;
+    prev_my = mouse_y;
+
     bool done = false;
     bool hovered = false;
-    int last_mx = mouse_x;
-    int last_my = mouse_y;
 
     while (!done) {
         struct mouse_state ms;
         mouse_get_state(&ms);
         if (ms.dx || ms.dy) {
-            graphics_fill_rect(last_mx, last_my, 16, 16, 0xFF0D0D2B);
+            if (prev_mx >= 0)
+                restore_cursor_bg(prev_mx, prev_my);
             mouse_x += ms.dx;
             mouse_y += ms.dy;
             if (mouse_x < 0) mouse_x = 0;
@@ -131,11 +150,14 @@ void login_screen(void) {
             if (over != hovered) {
                 hovered = over;
                 draw_panel();
+                save_cursor_bg(mouse_x, mouse_y);
+            } else {
+                save_cursor_bg(mouse_x, mouse_y);
             }
 
             draw_mouse();
-            last_mx = mouse_x;
-            last_my = mouse_y;
+            prev_mx = mouse_x;
+            prev_my = mouse_y;
         }
 
         if (ms.buttons & 0x01) {

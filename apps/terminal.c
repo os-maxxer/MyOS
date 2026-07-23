@@ -1,6 +1,6 @@
 #include <nyx/apps/terminal.h>
 #include <nyx/graphics.h>
-#include <nyx/ramfs.h>
+#include <nyx/vfs.h>
 #include <nyx/timer.h>
 #include <nyx/ports.h>
 #include <stdbool.h>
@@ -80,6 +80,22 @@ static void term_clear(void) {
     line_pos = 0;
 }
 
+static void int_to_str(int n, char *buf) {
+    char tmp[12];
+    int ti = 0;
+    if (n == 0) { tmp[ti++] = '0'; }
+    while (n > 0) { tmp[ti++] = '0' + (n % 10); n /= 10; }
+    int bi = 0;
+    while (ti > 0) buf[bi++] = tmp[--ti];
+    buf[bi] = '\0';
+}
+
+static void shell_prompt(void) {
+    term_print("user@NYX ");
+    term_print(vfs_get_cwd());
+    term_print("$ ");
+}
+
 static void shell_execute(const char *cmd) {
     while (*cmd == ' ') cmd++;
     if (!*cmd) return;
@@ -99,6 +115,9 @@ static void shell_execute(const char *cmd) {
         term_println("  echo <text>    - print text");
         term_println("  clear          - clear screen");
         term_println("  ls             - list files");
+        term_println("  cd [dir]       - change directory");
+        term_println("  pwd            - print working directory");
+        term_println("  mkdir <dir>    - create directory");
         term_println("  cat <file>     - show file contents");
         term_println("  rm <file>      - delete a file");
         term_println("  write <f> <t>  - write text to file");
@@ -117,33 +136,58 @@ static void shell_execute(const char *cmd) {
     } else if (str_eq(command, "echo")) {
         term_println(cmd);
 
+    } else if (str_eq(command, "pwd")) {
+        term_println(vfs_get_cwd());
+
+    } else if (str_eq(command, "cd")) {
+        if (vfs_cd(*cmd ? cmd : 0) != 0) {
+            term_print("cd: ");
+            term_print(*cmd ? cmd : "~");
+            term_println(": no such directory");
+        }
+
+    } else if (str_eq(command, "mkdir")) {
+        if (!*cmd) {
+            term_println("Usage: mkdir <dirname>");
+        } else if (vfs_mkdir(cmd) != 0) {
+            term_print("mkdir: cannot create '");
+            term_print(cmd);
+            term_println("'");
+        }
+
     } else if (str_eq(command, "ls")) {
-        char names[RAMFS_MAX_FILES][RAMFS_MAX_NAME];
-        int count = ramfs_list(names, RAMFS_MAX_FILES);
+        char names[NOFS_MAX_FILES][NOFS_MAX_NAME];
+        int count = vfs_ls(names, NOFS_MAX_FILES);
         if (count == 0) {
             term_println("(empty)");
         } else {
             for (int i = 0; i < count; i++) {
-                term_print(names[i]);
-                int fd = ramfs_open(names[i]);
-                if (fd >= 0) {
-                    int sz = ramfs_get_size(fd);
-                    term_print(" (");
-                    char buf[16];
-                    int bi = 0;
-                    if (sz == 0) { buf[bi++] = '0'; }
-                    else {
-                        int n = sz;
-                        char tmp[16];
-                        int ti = 0;
-                        while (n > 0) { tmp[ti++] = '0' + (n % 10); n /= 10; }
-                        while (ti > 0) buf[bi++] = tmp[--ti];
+                int len = str_len(names[i]);
+                if (len > 0 && names[i][len - 1] == '/') {
+                    // Directory
+                    term_print(names[i]);
+                    term_print("  ");
+                } else {
+                    term_print(names[i]);
+                    char fpath[64];
+                    int fi = 0;
+                    const char *cwd = vfs_get_cwd();
+                    for (int j = 0; cwd[j]; j++) fpath[fi++] = cwd[j];
+                    if (fpath[fi-1] != '/') fpath[fi++] = '/';
+                    for (int j = 0; names[i][j]; j++) fpath[fi++] = names[i][j];
+                    fpath[fi] = '\0';
+
+                    int fd = vfs_open(fpath);
+                    if (fd >= 0) {
+                        int sz = vfs_get_size(fd);
+                        term_print(" (");
+                        char buf[16];
+                        int_to_str(sz, buf);
+                        term_print(buf);
+                        term_print(" bytes)");
                     }
-                    buf[bi] = '\0';
-                    term_print(buf);
-                    term_print(" bytes)");
+                    term_print("  ");
                 }
-                term_print("  ");
             }
             term_print("\n");
         }
@@ -153,14 +197,14 @@ static void shell_execute(const char *cmd) {
             term_println("Usage: cat <filename>");
             return;
         }
-        int fd = ramfs_open(cmd);
+        int fd = vfs_open(cmd);
         if (fd < 0) {
             term_print("File not found: ");
             term_println(cmd);
             return;
         }
         uint8_t buf[4096];
-        int n = ramfs_read(fd, buf, sizeof(buf));
+        int n = vfs_read(fd, buf, sizeof(buf));
         if (n > 0) {
             buf[n] = '\0';
             term_print((const char *)buf);
@@ -172,7 +216,7 @@ static void shell_execute(const char *cmd) {
             term_println("Usage: rm <filename>");
             return;
         }
-        if (ramfs_delete(cmd) == 0) {
+        if (vfs_delete(cmd) == 0) {
             term_print("Deleted: ");
             term_println(cmd);
         } else {
@@ -193,15 +237,15 @@ static void shell_execute(const char *cmd) {
             return;
         }
         while (*cmd == ' ') cmd++;
-        int fd = ramfs_create(fname);
+        int fd = vfs_create(fname);
         if (fd < 0) {
-            fd = ramfs_open(fname);
+            fd = vfs_open(fname);
             if (fd < 0) {
                 term_println("Cannot create file (storage full)");
                 return;
             }
         }
-        ramfs_write(fd, (const uint8_t *)cmd, str_len(cmd));
+        vfs_write(fd, (const uint8_t *)cmd, str_len(cmd));
         term_print("Written: ");
         term_print(fname);
         term_print("\n");
@@ -211,7 +255,7 @@ static void shell_execute(const char *cmd) {
             term_println("Usage: touch <filename>");
             return;
         }
-        if (ramfs_create(cmd) < 0) {
+        if (vfs_create(cmd) < 0) {
             term_println("Cannot create file (exists or full)");
         } else {
             term_print("Created: ");
@@ -228,16 +272,16 @@ static void shell_execute(const char *cmd) {
             term_println("Usage: cp <src> <dst>");
             return;
         }
-        int sfd = ramfs_open(src);
+        int sfd = vfs_open(src);
         if (sfd < 0) { term_println("Source not found"); return; }
-        int dfd = ramfs_create(cmd);
+        int dfd = vfs_create(cmd);
         if (dfd < 0) {
-            dfd = ramfs_open(cmd);
+            dfd = vfs_open(cmd);
             if (dfd < 0) { term_println("Cannot create destination"); return; }
         }
         uint8_t buf[4096];
-        int n = ramfs_read(sfd, buf, sizeof(buf));
-        ramfs_write(dfd, buf, (n > 0) ? (uint32_t)n : 0);
+        int n = vfs_read(sfd, buf, sizeof(buf));
+        vfs_write(dfd, buf, (n > 0) ? (uint32_t)n : 0);
         term_print("Copied: ");
         term_print(src);
         term_print(" -> ");
@@ -253,17 +297,17 @@ static void shell_execute(const char *cmd) {
             term_println("Usage: mv <src> <dst>");
             return;
         }
-        int sfd = ramfs_open(src);
+        int sfd = vfs_open(src);
         if (sfd < 0) { term_println("Source not found"); return; }
         uint8_t buf[4096];
-        int n = ramfs_read(sfd, buf, sizeof(buf));
-        int dfd = ramfs_create(cmd);
+        int n = vfs_read(sfd, buf, sizeof(buf));
+        int dfd = vfs_create(cmd);
         if (dfd < 0) {
-            dfd = ramfs_open(cmd);
+            dfd = vfs_open(cmd);
             if (dfd < 0) { term_println("Cannot create destination"); return; }
         }
-        ramfs_write(dfd, buf, (n > 0) ? (uint32_t)n : 0);
-        ramfs_delete(src);
+        vfs_write(dfd, buf, (n > 0) ? (uint32_t)n : 0);
+        vfs_delete(src);
         term_print("Moved: ");
         term_print(src);
         term_print(" -> ");
@@ -274,10 +318,10 @@ static void shell_execute(const char *cmd) {
             term_println("Usage: hexdump <filename>");
             return;
         }
-        int fd = ramfs_open(cmd);
+        int fd = vfs_open(cmd);
         if (fd < 0) { term_println("File not found"); return; }
         uint8_t whole[4096];
-        int total = ramfs_read(fd, whole, sizeof(whole));
+        int total = vfs_read(fd, whole, sizeof(whole));
         if (total <= 0) { term_println("(empty)"); return; }
         int offset = 0;
         while (offset < total) {
@@ -415,8 +459,8 @@ static void shell_execute(const char *cmd) {
         term_println(" | |\\  || |_| | ___) |");
         term_println(" |_| \\_| \\___/ |____/ ");
         term_println("                      ");
-    term_println("  Nyx OS 0.2          ");
-    term_println("  ------------------- ");
+        term_println("  Nyx OS 0.2          ");
+        term_println("  ------------------- ");
         {
             uint32_t ticks = timer_get_ticks();
             uint32_t secs = ticks / 100;
@@ -457,9 +501,12 @@ static void shell_execute(const char *cmd) {
             term_println(upbuf);
         }
         term_println("  Kernel: Nyx OS (i386)");
-        term_println("  Shell:  myosh      ");
+        term_println("  Shell:  myosh v2 (VFS)");
         term_println("  WM:     mywm       ");
         term_println("  Res:    1024x768   ");
+        const char *cwd = vfs_get_cwd();
+        term_print("  CWD:    ");
+        term_println(cwd);
 
     } else {
         term_print("Unknown command: ");
@@ -468,17 +515,13 @@ static void shell_execute(const char *cmd) {
     }
 }
 
-static void shell_prompt(void) {
-    term_print("$ ");
-}
-
 void term_init(void) {
     for (int i = 0; i < TERM_BUF; i++)
         term_buffer[i] = ' ';
     term_row = 0;
     term_col = 0;
     line_pos = 0;
-    term_print("Nyx OS Terminal v0.2\n");
+    term_print("Nyx OS Terminal v0.2 (VFS enabled)\n");
     term_print("Type 'help' for commands.\n");
     shell_prompt();
 }

@@ -80,6 +80,18 @@ void graphics_init(uint32_t multiboot_info) {
     framebuffer_data = (uint8_t *)framebuffer.address;
     framebuffer_width = framebuffer.width;
     framebuffer_height = framebuffer.height;
+
+    console_write("[FB] Framebuffer at 0x");
+    console_write_hex((uint32_t)(uintptr_t)framebuffer.address);
+    console_write(", ");
+    console_write_dec(framebuffer.width);
+    console_write("x");
+    console_write_dec(framebuffer.height);
+    console_write(", ");
+    console_write_dec(framebuffer.bpp);
+    console_write(" bpp, pitch ");
+    console_write_dec(framebuffer.pitch);
+    console_write("\n");
 }
 
 bool graphics_is_ready(void) {
@@ -100,6 +112,19 @@ void graphics_clear(uint32_t color) {
 
 void graphics_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     framebuffer_set_pixel(x, y, color);
+}
+
+uint32_t graphics_get_pixel(uint32_t x, uint32_t y) {
+    if (!framebuffer.present || x >= framebuffer_width || y >= framebuffer_height)
+        return 0;
+    uint8_t *pixel = framebuffer_data + y * framebuffer.pitch + x * framebuffer.bytes_per_pixel;
+    switch (framebuffer.bytes_per_pixel) {
+        case 4: return *(uint32_t *)pixel;
+        case 3: return (uint32_t)pixel[0] | ((uint32_t)pixel[1] << 8) | ((uint32_t)pixel[2] << 16);
+        case 2: return (uint32_t)pixel[0] | ((uint32_t)pixel[1] << 8);
+        case 1: return pixel[0];
+        default: return 0;
+    }
 }
 
 void graphics_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
@@ -256,12 +281,31 @@ uint32_t graphics_get_height(void) {
 }
 
 void graphics_draw_mouse_cursor(uint32_t x, uint32_t y, uint32_t color) {
-    if (!framebuffer.present) {
-        return;
+    if (!framebuffer.present) return;
+    static const uint16_t arrow[16] = {
+        0x8000, 0xC000, 0xA000, 0x9000,
+        0x8800, 0x8400, 0x8200, 0x8100,
+        0x8000, 0x8000, 0x9C00, 0xA200,
+        0xC100, 0x8000, 0x0000, 0x0000
+    };
+    uint32_t black = 0xFF000000;
+    for (uint32_t row = 0; row < 16; row++) {
+        uint16_t bits = arrow[row];
+        if (!bits) continue;
+        for (uint32_t col = 0; col < 16; col++) {
+            if (!(bits & (0x8000 >> col))) continue;
+            if (col > 0) graphics_put_pixel(x + col - 1, y + row, black);
+            graphics_put_pixel(x + col + 1, y + row, black);
+            if (row > 0) graphics_put_pixel(x + col, y + row - 1, black);
+            graphics_put_pixel(x + col, y + row + 1, black);
+        }
     }
-    for (uint32_t row = 0; row < 16; ++row) {
-        for (uint32_t col = 0; col < 16; ++col) {
-            graphics_put_pixel(x + col, y + row, color);
+    for (uint32_t row = 0; row < 16; row++) {
+        uint16_t bits = arrow[row];
+        if (!bits) continue;
+        for (uint32_t col = 0; col < 16; col++) {
+            if (bits & (0x8000 >> col))
+                graphics_put_pixel(x + col, y + row, color);
         }
     }
 }

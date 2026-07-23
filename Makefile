@@ -26,7 +26,9 @@ OBJS := \
 	$(BUILD_DIR)/kernel/graphics.o \
 	$(BUILD_DIR)/kernel/timer.o \
 	$(BUILD_DIR)/kernel/apic.o \
-	$(BUILD_DIR)/kernel/ramfs.o \
+	$(BUILD_DIR)/kernel/nofs.o \
+	$(BUILD_DIR)/kernel/vfs.o \
+	$(BUILD_DIR)/kernel/ata.o \
 	$(BUILD_DIR)/gui/gui.o \
 	$(BUILD_DIR)/gui/login.o \
 	$(BUILD_DIR)/window_manager/window_manager.o \
@@ -34,6 +36,8 @@ OBJS := \
 	$(BUILD_DIR)/apps/notepad.o \
 	$(BUILD_DIR)/apps/terminal.o \
 	$(BUILD_DIR)/apps/paint.o \
+	$(BUILD_DIR)/apps/settings.o \
+	$(BUILD_DIR)/apps/filebrowser.o \
 	$(BUILD_DIR)/kernel/arch/i386/interrupts.o
 
 all: $(BUILD_DIR)/nyx.iso
@@ -74,10 +78,16 @@ $(BUILD_DIR)/kernel/graphics.o: $(KERNEL_DIR)/graphics.c | $(BUILD_DIR)
 $(BUILD_DIR)/kernel/timer.o: $(KERNEL_DIR)/timer.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/kernel/ramfs.o: $(KERNEL_DIR)/ramfs.c | $(BUILD_DIR)
+$(BUILD_DIR)/kernel/nofs.o: $(KERNEL_DIR)/nofs.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/vfs.o: $(KERNEL_DIR)/vfs.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/apic.o: $(KERNEL_DIR)/apic.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/ata.o: $(KERNEL_DIR)/ata.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/gui/gui.o: $(GUI_DIR)/gui.c | $(BUILD_DIR)
@@ -101,6 +111,12 @@ $(BUILD_DIR)/apps/terminal.o: $(APPS_DIR)/terminal.c | $(BUILD_DIR)
 $(BUILD_DIR)/apps/paint.o: $(APPS_DIR)/paint.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/apps/settings.o: $(APPS_DIR)/settings.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apps/filebrowser.o: $(APPS_DIR)/filebrowser.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel/arch/i386/interrupts.o: $(KERNEL_DIR)/arch/i386/interrupts.asm | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) -o $@ $<
 
@@ -113,16 +129,25 @@ $(BUILD_DIR)/nyx.iso: $(BUILD_DIR)/nyx.kernel boot/grub/grub.cfg
 	cp boot/grub/grub.cfg $(BUILD_DIR)/isofiles/boot/grub/grub.cfg
 	grub-mkrescue -o $@ $(BUILD_DIR)/isofiles >/dev/null 2>&1
 
-run: $(BUILD_DIR)/nyx.iso
-	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso
+$(BUILD_DIR)/disk.img:
+	dd if=/dev/zero bs=1M count=4 of=$@ 2>/dev/null
 
-run-serial: $(BUILD_DIR)/nyx.iso
-	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso -serial file:serial.log
+$(BUILD_DIR)/disk.vdi: $(BUILD_DIR)/disk.img
+	VBoxManage convertfromraw $(BUILD_DIR)/disk.img $(BUILD_DIR)/disk.vdi 2>/dev/null || \
+	  echo "Install VirtualBox or run: VBoxManage convertfromraw build/disk.img build/disk.vdi"
 
-run-nographic: $(BUILD_DIR)/nyx.iso
-	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso -nographic
+vbox-disk: $(BUILD_DIR)/disk.vdi
+
+run: $(BUILD_DIR)/nyx.iso $(BUILD_DIR)/disk.img
+	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide
+
+run-serial: $(BUILD_DIR)/nyx.iso $(BUILD_DIR)/disk.img
+	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -serial file:serial.log
+
+run-nographic: $(BUILD_DIR)/nyx.iso $(BUILD_DIR)/disk.img
+	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/nyx.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nographic
 
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all run clean
+.PHONY: all run clean vbox-disk
