@@ -1,0 +1,10 @@
+{
+    "name": "nypkg",
+    "version": "1.0.0",
+    "description": "Nyx Package Manager - install, purge, and search packages",
+    "author": "Nyx OS",
+    "license": "MIT",
+    "npx": "nypkg.npx",
+    "source": ["pkg.c", "pkg_npx.c"],
+    "dependencies": []
+}

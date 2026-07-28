@@ -1,0 +1,10 @@
+{
+    "name": "taskmanager",
+    "version": "1.0.0",
+    "description": "System monitor showing CPU, RAM, uptime and installed apps",
+    "author": "Nyx OS",
+    "license": "MIT",
+    "npx": "taskmanager.npx",
+    "source": ["taskmanager.c", "taskmanager_npx.c"],
+    "dependencies": []
+}

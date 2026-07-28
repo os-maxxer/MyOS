@@ -1,0 +1,21 @@
+{
+    "name": "nyx-packages",
+    "description": "Official Nyx OS package repository",
+    "version": 1,
+    "packages": [
+        {
+            "name": "taskmanager",
+            "version": "1.0.0",
+            "description": "System monitor showing CPU, RAM, uptime and installed apps",
+            "author": "Nyx OS",
+            "file": "taskmanager.npx"
+        },
+        {
+            "name": "nypkg",
+            "version": "1.0.0",
+            "description": "Nyx Package Manager - install, purge, and search packages",
+            "author": "Nyx OS",
+            "file": "nypkg.npx"
+        }
+    ]
+}

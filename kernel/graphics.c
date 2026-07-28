@@ -310,3 +310,82 @@ void graphics_draw_mouse_cursor(uint32_t x, uint32_t y, uint32_t color) {
     }
 }
 
+static uint32_t lerp_color_gr(uint32_t c1, uint32_t c2, int t, int max) {
+    uint8_t r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+    uint8_t r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+    uint8_t r = r1 + ((r2 - r1) * t / max);
+    uint8_t g = g1 + ((g2 - g1) * t / max);
+    uint8_t b = b1 + ((b2 - b1) * t / max);
+    return 0xFF000000 | (r << 16) | (g << 8) | b;
+}
+
+void graphics_fill_rounded_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint32_t color) {
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    if (r == 0) { graphics_fill_rect(x, y, w, h, color); return; }
+    graphics_fill_rect(x + r, y, w - r * 2, h, color);
+    graphics_fill_rect(x, y + r, r, h - r * 2, color);
+    graphics_fill_rect(x + w - r, y + r, r, h - r * 2, color);
+    for (uint32_t cy = 0; cy <= r; cy++) {
+        for (uint32_t cx = 0; cx <= r; cx++) {
+            if (cx * cx + cy * cy <= r * r) {
+                graphics_put_pixel(x + r - cx, y + r - cy, color);
+                graphics_put_pixel(x + w - r - 1 + cx, y + r - cy, color);
+                graphics_put_pixel(x + r - cx, y + h - r - 1 + cy, color);
+                graphics_put_pixel(x + w - r - 1 + cx, y + h - r - 1 + cy, color);
+            }
+        }
+    }
+}
+
+void graphics_draw_rounded_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint32_t color) {
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    if (r == 0) { graphics_draw_rect(x, y, w, h, color); return; }
+    graphics_fill_rect(x + r, y, w - r * 2, 1, color);
+    graphics_fill_rect(x + r, y + h - 1, w - r * 2, 1, color);
+    graphics_fill_rect(x, y + r, 1, h - r * 2, color);
+    graphics_fill_rect(x + w - 1, y + r, 1, h - r * 2, color);
+    for (uint32_t cy = 0; cy <= r; cy++) {
+        for (uint32_t cx = 0; cx <= r; cx++) {
+            if (cx == 0 || cy == 0) continue;
+            if (cx * cx + cy * cy <= r * r && (cx+1)*(cx+1) + (cy+1)*(cy+1) > r*r) {
+                graphics_put_pixel(x + r - cx, y + r - cy, color);
+                graphics_put_pixel(x + w - r - 1 + cx, y + r - cy, color);
+                graphics_put_pixel(x + r - cx, y + h - r - 1 + cy, color);
+                graphics_put_pixel(x + w - r - 1 + cx, y + h - r - 1 + cy, color);
+            }
+        }
+    }
+}
+
+void graphics_fill_gradient_v(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color_top, uint32_t color_bottom) {
+    for (uint32_t row = 0; row < h; row++) {
+        graphics_fill_rect(x, y + row, w, 1, lerp_color_gr(color_top, color_bottom, row, h));
+    }
+}
+
+void graphics_fill_circle(uint32_t cx, uint32_t cy, uint32_t r, uint32_t color) {
+    for (uint32_t dy = 0; dy <= r; dy++) {
+        for (uint32_t dx = 0; dx <= r; dx++) {
+            if (dx * dx + dy * dy <= r * r) {
+                graphics_put_pixel(cx + dx, cy + dy, color);
+                if (dx) graphics_put_pixel(cx - dx, cy + dy, color);
+                if (dy) graphics_put_pixel(cx + dx, cy - dy, color);
+                if (dx && dy) graphics_put_pixel(cx - dx, cy - dy, color);
+            }
+        }
+    }
+}
+
+void graphics_draw_circle(uint32_t cx, uint32_t cy, uint32_t r, uint32_t color) {
+    for (int32_t dy = -(int32_t)r; dy <= (int32_t)r; dy++) {
+        for (int32_t dx = -(int32_t)r; dx <= (int32_t)r; dx++) {
+            int32_t d = dx * dx + dy * dy;
+            int32_t rr = (int32_t)r;
+            if (d >= rr * rr && d < (rr + 1) * (rr + 1)) {
+                graphics_put_pixel(cx + dx, cy + dy, color);
+            }
+        }
+    }
+}

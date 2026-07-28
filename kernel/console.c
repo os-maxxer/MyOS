@@ -4,11 +4,29 @@
  */
 
 #include <nyx/console.h>
+#include <nyx/ports.h>
+
+#define COM1 0x3F8
 
 static uint16_t *video_memory = (uint16_t *)0xB8000;
 static uint8_t cursor_row = 0;
 static uint8_t cursor_col = 0;
 static uint8_t current_color = 0x0F;
+
+static void serial_init(void) {
+    outb(COM1 + 1, 0x00);
+    outb(COM1 + 3, 0x80);
+    outb(COM1 + 0, 0x03);
+    outb(COM1 + 1, 0x00);
+    outb(COM1 + 3, 0x03);
+    outb(COM1 + 2, 0xC7);
+    outb(COM1 + 4, 0x0B);
+}
+
+static void serial_putc(char c) {
+    while (!(inb(COM1 + 5) & 0x20));
+    outb(COM1, c);
+}
 
 static void console_scroll(void) {
     for (uint8_t row = 1; row < 25; ++row) {
@@ -22,6 +40,7 @@ static void console_scroll(void) {
 }
 
 void console_init(void) {
+    serial_init();
     console_clear();
     console_set_color(0x0F, 0x00);
 }
@@ -48,6 +67,7 @@ static void console_newline(void) {
 }
 
 void console_putc(char c) {
+    serial_putc(c);
     if (c == '\n') {
         console_newline();
         return;

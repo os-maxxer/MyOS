@@ -314,6 +314,32 @@ int nofs_get_size(int fd) {
     return (int)d->file_size;
 }
 
+int nofs_mkdir(const char *name) {
+    if (!name || !name[0]) return -1;
+    if (nofs_open(name) >= 0) return -1;
+
+    for (int i = 0; i < NOFS_DIR_ENTRIES; i++) {
+        struct nofs_dirent *d = dirent(i);
+        if (d->name[0] == '\0') {
+            str_cpy(d->name, name, sizeof(d->name));
+            d->attrs = NOFS_ATTR_DIR;
+            d->first_cluster = 0;
+            d->file_size = 0;
+            dir_dirty = true;
+            sync_dir();
+            return i;
+        }
+    }
+    return -1;
+}
+
+int nofs_isdir(int fd) {
+    if (fd < 0 || fd >= NOFS_DIR_ENTRIES) return -1;
+    struct nofs_dirent *d = dirent(fd);
+    if (d->name[0] == '\0') return -1;
+    return (d->attrs & NOFS_ATTR_DIR) ? 1 : 0;
+}
+
 uint64_t nofs_get_machine_id(void) {
     return cached_machine_id;
 }

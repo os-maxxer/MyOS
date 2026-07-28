@@ -7,6 +7,7 @@
 #define NOFS_MAX_NAME     24
 #define NOFS_BLOCK_SIZE   512
 #define NOFS_MAX_FILE_SIZE (8157 * NOFS_BLOCK_SIZE)
+#define NOFS_ATTR_DIR     0x01
 
 void nofs_init(void);
 int  nofs_create(const char *name);
@@ -16,6 +17,8 @@ int  nofs_write(int fd, const uint8_t *buf, uint32_t size);
 int  nofs_delete(const char *name);
 int  nofs_list(char names[][NOFS_MAX_NAME], int max);
 int  nofs_get_size(int fd);
+int  nofs_mkdir(const char *name);
+int  nofs_isdir(int fd);
 uint64_t nofs_get_machine_id(void);
 
 #endif

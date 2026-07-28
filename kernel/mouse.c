@@ -63,8 +63,10 @@ static void mouse_wait(uint8_t type) {
 static void mouse_write(uint8_t data) {
     mouse_wait(0);
     outb(0x64, 0xD4);
+    io_wait();
     mouse_wait(0);
     outb(0x60, data);
+    io_wait();
 }
 
 static uint8_t mouse_read(void) {
@@ -75,16 +77,19 @@ static uint8_t mouse_read(void) {
 void mouse_init(void) {
     mouse_wait(0);
     outb(0x64, 0xA8);
-
+    io_wait();
     mouse_wait(0);
     outb(0x64, 0x20);
+    io_wait();
     mouse_wait(1);
     uint8_t status = inb(0x60);
-    status |= 0x02;
+    status |= 0x02 | 0x20;
     mouse_wait(0);
     outb(0x64, 0x60);
+    io_wait();
     mouse_wait(0);
     outb(0x60, status);
+    io_wait();
 
     mouse_write(0xF6);
     mouse_read();

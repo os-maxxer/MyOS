@@ -3,10 +3,12 @@
 #include <nyx/mouse.h>
 #include <nyx/keyboard.h>
 
-#define PANEL_W 420
-#define PANEL_H 340
+#define PANEL_W 380
+#define PANEL_H 300
 #define BTN_W 200
-#define BTN_H 48
+#define BTN_H 44
+#define PANEL_R 12
+#define BTN_R 8
 
 static int mouse_x = 512;
 static int mouse_y = 384;
@@ -27,76 +29,27 @@ static void restore_cursor_bg(int x, int y) {
             graphics_put_pixel(x + c, y + r, cursor_bg[r * 16 + c]);
 }
 
-static uint32_t lerp_color(uint32_t c1, uint32_t c2, int t, int max) {
-    uint8_t r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
-    uint8_t r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
-    uint8_t r = r1 + ((r2 - r1) * t / max);
-    uint8_t g = g1 + ((g2 - g1) * t / max);
-    uint8_t b = b1 + ((b2 - b1) * t / max);
-    return 0xFF000000 | (r << 16) | (g << 8) | b;
-}
-
-static void draw_gradient_bg(void) {
+static void draw_logo(void) {
     uint32_t w = graphics_get_width();
-    uint32_t h = graphics_get_height();
-    uint32_t c1 = 0xFF0D0D2B;
-    uint32_t c2 = 0xFF1A0A3E;
-    for (uint32_t y = 0; y < h; y++) {
-        uint32_t color = lerp_color(c1, c2, y, h);
-        graphics_fill_rect(0, y, w, 1, color);
-    }
-}
-
-static void draw_stars(void) {
-    uint32_t w = graphics_get_width();
-    uint32_t h = graphics_get_height();
-    uint32_t seed = 42;
-    for (int i = 0; i < 120; i++) {
-        seed = seed * 1103515245 + 12345;
-        uint32_t x = (seed >> 16) % w;
-        seed = seed * 1103515245 + 12345;
-        uint32_t y = (seed >> 16) % h;
-        seed = seed * 1103515245 + 12345;
-        uint32_t brightness = ((seed >> 16) & 0x7F) + 0x80;
-        uint32_t color = 0xFF000000 | (brightness << 16) | (brightness << 8) | brightness;
-        graphics_put_pixel(x, y, color);
-    }
-}
-
-static void draw_nebula(void) {
-    uint32_t w = graphics_get_width();
-    uint32_t h = graphics_get_height();
-    int cx = (int)w / 3;
-    int cy = (int)h / 4;
-    for (int r = 80; r > 0; r -= 2) {
-        uint32_t color = lerp_color(0x00000000, 0x223366FF, r, 80);
-        graphics_fill_rect(cx - r, cy - r, r * 2, r * 2, color);
-    }
-    cx = (int)w * 2 / 3;
-    cy = (int)h * 2 / 3;
-    for (int r = 60; r > 0; r -= 2) {
-        uint32_t color = lerp_color(0x00000000, 0x226633AA, r, 60);
-        graphics_fill_rect(cx - r, cy - r, r * 2, r * 2, color);
-    }
+    uint32_t cx = (int)w / 2;
+    int logo_y = 80;
+    graphics_fill_circle(cx, logo_y, 36, 0xFF6C63FF);
+    graphics_fill_circle(cx, logo_y, 28, 0xFF1A1A3E);
+    graphics_draw_string(cx - 24, logo_y - 46, "Nyx", 0xFF6C63FF);
+    graphics_draw_string(cx - 28, logo_y + 52, "Nyx OS", 0xFFB0B0FF);
 }
 
 static void draw_panel(void) {
     uint32_t w = graphics_get_width();
     uint32_t h = graphics_get_height();
     int px = ((int)w - PANEL_W) / 2;
-    int py = ((int)h - PANEL_H) / 2 - 30;
+    int py = ((int)h - PANEL_H) / 2 + 40;
 
-    graphics_fill_rect(px, py, PANEL_W, PANEL_H, 0xDD1A1A2E);
-    graphics_draw_rect(px, py, PANEL_W, PANEL_H, 0xFF6A5ACD);
-    graphics_draw_rect(px - 1, py - 1, PANEL_W + 2, PANEL_H + 2, 0x33C0C0C0);
+    graphics_fill_rounded_rect(px - 2, py - 2, PANEL_W + 4, PANEL_H + 4, PANEL_R + 2, 0x22000000);
+    graphics_fill_rounded_rect(px, py, PANEL_W, PANEL_H, PANEL_R, 0xDD1A1A2E);
+    graphics_draw_rounded_rect(px, py, PANEL_W, PANEL_H, PANEL_R, 0xFF6A5ACD);
 
-    graphics_draw_string(px + 60, py + 24, "  _   _   ___    ____  ", 0xFF9370DB);
-    graphics_draw_string(px + 60, py + 40, " | \\ | | / _ \\  / ___| ", 0xFF9370DB);
-    graphics_draw_string(px + 60, py + 56, " |  \\| || | | | \\___ \\ ", 0xFFB088F0);
-    graphics_draw_string(px + 60, py + 72, " | |\\  || |_| | ___) |", 0xFFB088F0);
-    graphics_draw_string(px + 60, py + 88, " |_| \\_| \\___/ |____/ ", 0xFFD4A0FF);
-
-    graphics_draw_string(px + 112, py + 130, "Welcome, User!", 0xFFE0E0FF);
+    graphics_draw_string(px + 100, py + 40, "Welcome, User!", 0xFFE0E0FF);
 
     int bx = px + (PANEL_W - BTN_W) / 2;
     int by = py + 200;
@@ -105,9 +58,9 @@ static void draw_panel(void) {
     btn_rect[2] = BTN_W;
     btn_rect[3] = BTN_H;
 
-    graphics_fill_rect(bx, by, BTN_W, BTN_H, 0xFF4A3BA0);
-    graphics_draw_rect(bx, by, BTN_W, BTN_H, 0xFF7B68EE);
-    graphics_draw_string(bx + 48, by + 16, "  Sign In  ", 0xFFFFFFFF);
+    graphics_fill_rounded_rect(bx, by, BTN_W, BTN_H, BTN_R, 0xFF6C63FF);
+    graphics_draw_rounded_rect(bx, by, BTN_W, BTN_H, BTN_R, 0xFF8B83FF);
+    graphics_draw_string(bx + 56, by + 14, "  Sign In  ", 0xFFFFFFFF);
 }
 
 static void draw_mouse(void) {
@@ -119,9 +72,22 @@ static void draw_mouse(void) {
 }
 
 void login_screen(void) {
-    draw_gradient_bg();
-    draw_nebula();
-    draw_stars();
+    uint32_t w = graphics_get_width();
+    uint32_t h = graphics_get_height();
+    graphics_fill_gradient_v(0, 0, w, h, 0xFF0D0D2B, 0xFF1A0A3E);
+
+    uint32_t seed = 42;
+    for (int i = 0; i < 150; i++) {
+        seed = seed * 1103515245 + 12345;
+        uint32_t sx = (seed >> 16) % w;
+        seed = seed * 1103515245 + 12345;
+        uint32_t sy = (seed >> 16) % h;
+        seed = seed * 1103515245 + 12345;
+        uint32_t b = ((seed >> 16) & 0x7F) + 0x80;
+        graphics_put_pixel(sx, sy, 0xFF000000 | (b << 16) | (b << 8) | b);
+    }
+
+    draw_logo();
     draw_panel();
 
     save_cursor_bg(mouse_x, mouse_y);
@@ -142,8 +108,8 @@ void login_screen(void) {
             mouse_y += ms.dy;
             if (mouse_x < 0) mouse_x = 0;
             if (mouse_y < 0) mouse_y = 0;
-            if (mouse_x >= (int)graphics_get_width()) mouse_x = (int)graphics_get_width() - 1;
-            if (mouse_y >= (int)graphics_get_height()) mouse_y = (int)graphics_get_height() - 1;
+            if (mouse_x >= (int)w) mouse_x = (int)w - 1;
+            if (mouse_y >= (int)h) mouse_y = (int)h - 1;
 
             int bx = btn_rect[0], by = btn_rect[1];
             bool over = (mouse_x >= bx && mouse_x < bx + BTN_W && mouse_y >= by && mouse_y < by + BTN_H);

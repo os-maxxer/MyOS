@@ -4,11 +4,8 @@
 #include <stdbool.h>
 
 #define VFS_MAX_PATH 64
-#define VFS_MAX_DIRS 16
 
 static char cwd[VFS_MAX_PATH];
-static char dirs[VFS_MAX_DIRS][VFS_MAX_PATH];
-static int dir_count = 0;
 
 static int str_len(const char *s) {
     int n = 0;
@@ -36,18 +33,16 @@ static bool starts_with(const char *s, const char *pre) {
     return true;
 }
 
-static void add_dir(const char *path) {
-    if (dir_count >= VFS_MAX_DIRS) return;
-    str_cpy(dirs[dir_count], path, VFS_MAX_PATH);
-    dir_count++;
-}
-
 static bool dir_exists(const char *path) {
     if (str_eq(path, "/")) return true;
-    for (int i = 0; i < dir_count; i++) {
-        if (str_eq(dirs[i], path)) return true;
-    }
-    return false;
+    char flat[NOFS_MAX_NAME];
+    int pi = 0;
+    for (int i = 1; path[i] && pi < NOFS_MAX_NAME - 1; i++)
+        flat[pi++] = path[i];
+    flat[pi] = '\0';
+    int fd = nofs_open(flat);
+    if (fd < 0) return false;
+    return nofs_isdir(fd) == 1;
 }
 
 static void resolve_path(const char *base, const char *input, char *out, int max) {
@@ -126,12 +121,10 @@ static void resolve_path(const char *base, const char *input, char *out, int max
 
 void vfs_init(void) {
     str_cpy(cwd, "/home", VFS_MAX_PATH);
-    dir_count = 0;
-    add_dir("/");
-    add_dir("/home");
-    add_dir("/docs");
-    add_dir("/downloads");
-    add_dir("/desktop");
+    nofs_mkdir("home");
+    nofs_mkdir("docs");
+    nofs_mkdir("downloads");
+    nofs_mkdir("desktop");
     console_write("[VFS] initialized: /home, /docs, /downloads, /desktop\n");
 }
 
@@ -160,7 +153,12 @@ int vfs_mkdir(const char *path) {
 
     if (dir_exists(target)) return -1;
 
-    add_dir(target);
+    char flat[NOFS_MAX_NAME];
+    int pi = 0;
+    for (int i = 1; target[i] && pi < NOFS_MAX_NAME - 1; i++)
+        flat[pi++] = target[i];
+    flat[pi] = '\0';
+    if (nofs_mkdir(flat) < 0) return -1;
     return 0;
 }
 
@@ -174,38 +172,26 @@ int vfs_ls_at(const char *path, char names[][NOFS_MAX_NAME], int max) {
     int out = 0;
     int path_len = str_len(path);
 
-    for (int i = 0; i < dir_count && out < max; i++) {
-        if (str_eq(dirs[i], "/") || str_eq(dirs[i], path)) continue;
-
-        if (starts_with(dirs[i], path)) {
-            const char *rest = dirs[i] + path_len;
-            if (*rest == '/') rest++;
-            if (!rest[0]) continue;
-
-            bool sub = false;
-            for (int j = 0; rest[j]; j++) {
-                if (rest[j] == '/') { sub = true; break; }
-            }
-            if (!sub) {
-                int ni = 0;
-                while (rest[ni] && ni < NOFS_MAX_NAME - 2) {
-                    names[out][ni] = rest[ni];
-                    ni++;
-                }
-                names[out][ni++] = '/';
-                names[out][ni] = '\0';
-                out++;
-            }
-        }
-    }
-
     for (int i = 0; i < count && out < max; i++) {
+        bool is_dir_entry = false;
+        int fd = nofs_open(all[i]);
+        if (fd >= 0 && nofs_isdir(fd) == 1)
+            is_dir_entry = true;
+
         if (str_eq(path, "/")) {
             bool has_slash = false;
             for (int j = 0; all[i][j]; j++) {
                 if (all[i][j] == '/') { has_slash = true; break; }
             }
-            if (!has_slash) {
+            if (is_dir_entry) {
+                str_cpy(names[out], all[i], NOFS_MAX_NAME);
+                int nl = str_len(names[out]);
+                if (nl > 0 && nl < NOFS_MAX_NAME - 1) {
+                    names[out][nl] = '/';
+                    names[out][nl + 1] = '\0';
+                }
+                out++;
+            } else if (!has_slash) {
                 str_cpy(names[out], all[i], NOFS_MAX_NAME);
                 out++;
             }
@@ -215,8 +201,18 @@ int vfs_ls_at(const char *path, char names[][NOFS_MAX_NAME], int max) {
             for (int j = 0; rest[j]; j++) {
                 if (rest[j] == '/') { sub = true; break; }
             }
+            if (is_dir_entry && str_eq(all[i], path + 1)) {
+                continue;
+            }
             if (!sub && rest[0]) {
                 str_cpy(names[out], rest, NOFS_MAX_NAME);
+                if (is_dir_entry) {
+                    int nl = str_len(names[out]);
+                    if (nl > 0 && nl < NOFS_MAX_NAME - 1) {
+                        names[out][nl] = '/';
+                        names[out][nl + 1] = '\0';
+                    }
+                }
                 out++;
             }
         }

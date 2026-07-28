@@ -3,7 +3,14 @@
 #include <nyx/vfs.h>
 #include <nyx/timer.h>
 #include <nyx/ports.h>
+#include <nyx/npx.h>
 #include <stdbool.h>
+
+extern int gui_launch_app(int slot);
+extern int net_ping(const uint8_t *ip, uint32_t timeout_ms);
+extern int net_arp_resolve(const uint8_t *ip, uint8_t *mac);
+extern int net_available(void);
+extern int dbg_read(char *buf, int max);
 
 #define TERM_ROWS 32
 #define TERM_COLS 80
@@ -129,6 +136,10 @@ static void shell_execute(const char *cmd) {
         term_println("  reboot         - restart the system");
         term_println("  calc <a> <op> <b> - calculate a+b, a-b, a*b, a/b");
         term_println("  neofetch       - show system info");
+        term_println("  nypkg          - launch NYPKG package manager");
+        term_println("  ping <ip>      - ICMP ping an IP address");
+        term_println("  arp <ip>       - resolve MAC for an IP");
+        term_println("  dmesg          - show kernel debug log");
 
     } else if (str_eq(command, "clear")) {
         term_clear();
@@ -452,6 +463,100 @@ static void shell_execute(const char *cmd) {
         term_print(" = ");
         term_println(res_str);
 
+    } else if (str_eq(command, "nypkg")) {
+        gui_launch_app(NPX_PKG);
+
+    } else if (str_eq(command, "ping")) {
+        if (!*cmd) {
+            term_println("Usage: ping <ip>");
+            return;
+        }
+        uint8_t ip[4];
+        int octet = 0, part = 0, ip_ok = 1;
+        const char *s = cmd;
+        for (int i = 0; i < 4; i++) {
+            octet = 0; part = 0;
+            while (*s >= '0' && *s <= '9') {
+                octet = octet * 10 + (*s - '0');
+                s++; part++;
+            }
+            if (part == 0 || octet > 255) { ip_ok = 0; break; }
+            ip[i] = (uint8_t)octet;
+            if (i < 3 && *s != '.') { ip_ok = 0; break; }
+            if (i < 3) s++;
+        }
+        if (!ip_ok || *s) {
+            term_println("Bad IP format. Use: ping a.b.c.d");
+            return;
+        }
+        if (!net_available()) {
+            term_println("Network not available.");
+            return;
+        }
+        term_print("Pinging ");
+        term_print(cmd);
+        term_print("...\n");
+        int result = net_ping(ip, 200);
+        if (result == 0) {
+            term_print("Reply received!\n");
+        } else {
+            term_print("No reply (timeout or no route).\n");
+        }
+
+    } else if (str_eq(command, "arp")) {
+        if (!*cmd) {
+            term_println("Usage: arp <ip>");
+            return;
+        }
+        uint8_t ip[4];
+        int octet = 0, part = 0, ip_ok = 1;
+        const char *s = cmd;
+        for (int i = 0; i < 4; i++) {
+            octet = 0; part = 0;
+            while (*s >= '0' && *s <= '9') {
+                octet = octet * 10 + (*s - '0');
+                s++; part++;
+            }
+            if (part == 0 || octet > 255) { ip_ok = 0; break; }
+            ip[i] = (uint8_t)octet;
+            if (i < 3 && *s != '.') { ip_ok = 0; break; }
+            if (i < 3) s++;
+        }
+        if (!ip_ok || *s) {
+            term_println("Bad IP format. Use: arp a.b.c.d");
+            return;
+        }
+        uint8_t mac[6];
+        int result = net_arp_resolve(ip, mac);
+        if (result == 0) {
+            term_print("MAC: ");
+            for (int i = 0; i < 6; i++) {
+                char hex[3];
+                hex[0] = "0123456789ABCDEF"[mac[i] >> 4];
+                hex[1] = "0123456789ABCDEF"[mac[i] & 0x0F];
+                hex[2] = '\0';
+                term_print(hex);
+                if (i < 5) term_print(":");
+            }
+            term_print("\n");
+        } else {
+            term_println("ARP resolution failed.\n");
+        }
+
+    } else if (str_eq(command, "dmesg")) {
+        char buf[512];
+        int n = dbg_read(buf, 512);
+        int start = 0;
+        for (int i = 0; i < n; i++) {
+            if (buf[i] == '\n' || i == n - 1) {
+                char save = buf[i + 1];
+                buf[i + 1] = '\0';
+                term_println(buf + start);
+                buf[i + 1] = save;
+                start = i + 1;
+            }
+        }
+
     } else if (str_eq(command, "neofetch")) {
         term_println("  _   _   ___    ____  ");
         term_println(" | \\ | | / _ \\  / ___| ");
@@ -533,6 +638,8 @@ void term_draw(int x, int y, int w, int h) {
     int rows = (h - 4) / 16;
     if (cols > TERM_COLS) cols = TERM_COLS;
     if (rows > TERM_ROWS) rows = TERM_ROWS;
+
+    graphics_fill_rect(x, y, w, h, 0xFF000000);
 
     int start_row = term_row - rows + 1;
     if (start_row < 0) start_row = 0;

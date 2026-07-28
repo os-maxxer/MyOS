@@ -22,5 +22,8 @@ uint32_t gui_get_bg_color(void);
 void gui_set_theme(int theme);
 int  gui_get_theme(void);
 int  gui_launch_filebrowser(void);
+int  gui_launch_taskmanager(void);
+int  gui_launch_pkg(void);
+int  gui_launch_app(int slot);
 
 #endif
