@@ -3,8 +3,8 @@
  * This provides a simple VGA text console for milestone 1 output.
  */
 
-#include <nyx/console.h>
-#include <nyx/ports.h>
+#include <solis/console.h>
+#include <solis/ports.h>
 
 #define COM1 0x3F8
 

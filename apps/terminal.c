@@ -1,9 +1,9 @@
-#include <nyx/apps/terminal.h>
-#include <nyx/graphics.h>
-#include <nyx/vfs.h>
-#include <nyx/timer.h>
-#include <nyx/ports.h>
-#include <nyx/npx.h>
+#include <solis/apps/terminal.h>
+#include <solis/graphics.h>
+#include <solis/vfs.h>
+#include <solis/timer.h>
+#include <solis/ports.h>
+#include <solis/spx.h>
 #include <stdbool.h>
 
 extern int gui_launch_app(int slot);
@@ -17,7 +17,15 @@ extern int dbg_read(char *buf, int max);
 #define TERM_BUF (TERM_ROWS * TERM_COLS)
 #define LINE_BUF 256
 
+#define TERM_COL_TEXT   0xEAEAEA
+#define TERM_COL_ACCENT 0xD9A441
+
+#define TERM_ATTR_NORMAL 0
+#define TERM_ATTR_PROMPT 1
+
 static char term_buffer[TERM_BUF];
+static uint8_t term_attr[TERM_BUF];
+static uint8_t term_fg = TERM_ATTR_NORMAL;
 static int term_row = 0;
 static int term_col = 0;
 
@@ -36,10 +44,14 @@ static int str_len(const char *s) {
 }
 
 static void term_scroll(void) {
-    for (int i = 0; i < TERM_BUF - TERM_COLS; i++)
+    for (int i = 0; i < TERM_BUF - TERM_COLS; i++) {
         term_buffer[i] = term_buffer[i + TERM_COLS];
-    for (int i = TERM_BUF - TERM_COLS; i < TERM_BUF; i++)
+        term_attr[i] = term_attr[i + TERM_COLS];
+    }
+    for (int i = TERM_BUF - TERM_COLS; i < TERM_BUF; i++) {
         term_buffer[i] = ' ';
+        term_attr[i] = TERM_ATTR_NORMAL;
+    }
     if (term_row > 0) term_row--;
 }
 
@@ -54,6 +66,7 @@ static void term_putchar(char c) {
         if (term_col > 0) {
             term_col--;
             term_buffer[term_row * TERM_COLS + term_col] = ' ';
+            term_attr[term_row * TERM_COLS + term_col] = TERM_ATTR_NORMAL;
         }
         return;
     }
@@ -66,6 +79,7 @@ static void term_putchar(char c) {
     int idx = term_row * TERM_COLS + term_col;
     if (idx < TERM_BUF) {
         term_buffer[idx] = c;
+        term_attr[idx] = term_fg;
         term_col++;
     }
 }
@@ -80,8 +94,11 @@ static void term_println(const char *s) {
 }
 
 static void term_clear(void) {
-    for (int i = 0; i < TERM_BUF; i++)
+    for (int i = 0; i < TERM_BUF; i++) {
         term_buffer[i] = ' ';
+        term_attr[i] = TERM_ATTR_NORMAL;
+    }
+    term_fg = TERM_ATTR_NORMAL;
     term_row = 0;
     term_col = 0;
     line_pos = 0;
@@ -98,9 +115,11 @@ static void int_to_str(int n, char *buf) {
 }
 
 static void shell_prompt(void) {
-    term_print("user@NYX ");
+    term_fg = TERM_ATTR_PROMPT;
+    term_print("user@SOLIS ");
     term_print(vfs_get_cwd());
     term_print("$ ");
+    term_fg = TERM_ATTR_NORMAL;
 }
 
 static void shell_execute(const char *cmd) {
@@ -136,7 +155,7 @@ static void shell_execute(const char *cmd) {
         term_println("  reboot         - restart the system");
         term_println("  calc <a> <op> <b> - calculate a+b, a-b, a*b, a/b");
         term_println("  neofetch       - show system info");
-        term_println("  nypkg          - launch NYPKG package manager");
+        term_println("  solpkg          - launch SOLPKG package manager");
         term_println("  ping <ip>      - ICMP ping an IP address");
         term_println("  arp <ip>       - resolve MAC for an IP");
         term_println("  dmesg          - show kernel debug log");
@@ -167,8 +186,8 @@ static void shell_execute(const char *cmd) {
         }
 
     } else if (str_eq(command, "ls")) {
-        char names[NOFS_MAX_FILES][NOFS_MAX_NAME];
-        int count = vfs_ls(names, NOFS_MAX_FILES);
+        char names[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
+        int count = vfs_ls(names, SOLFS_MAX_FILES);
         if (count == 0) {
             term_println("(empty)");
         } else {
@@ -463,8 +482,8 @@ static void shell_execute(const char *cmd) {
         term_print(" = ");
         term_println(res_str);
 
-    } else if (str_eq(command, "nypkg")) {
-        gui_launch_app(NPX_PKG);
+    } else if (str_eq(command, "solpkg")) {
+        gui_launch_app(SPX_PKG);
 
     } else if (str_eq(command, "ping")) {
         if (!*cmd) {
@@ -564,7 +583,7 @@ static void shell_execute(const char *cmd) {
         term_println(" | |\\  || |_| | ___) |");
         term_println(" |_| \\_| \\___/ |____/ ");
         term_println("                      ");
-        term_println("  Nyx OS 0.2          ");
+        term_println("  Solis OS 0.2          ");
         term_println("  ------------------- ");
         {
             uint32_t ticks = timer_get_ticks();
@@ -605,7 +624,7 @@ static void shell_execute(const char *cmd) {
             term_print("  Uptime: ");
             term_println(upbuf);
         }
-        term_println("  Kernel: Nyx OS (i386)");
+        term_println("  Kernel: Solis OS (i386)");
         term_println("  Shell:  myosh v2 (VFS)");
         term_println("  WM:     mywm       ");
         term_println("  Res:    1024x768   ");
@@ -621,12 +640,15 @@ static void shell_execute(const char *cmd) {
 }
 
 void term_init(void) {
-    for (int i = 0; i < TERM_BUF; i++)
+    for (int i = 0; i < TERM_BUF; i++) {
         term_buffer[i] = ' ';
+        term_attr[i] = TERM_ATTR_NORMAL;
+    }
+    term_fg = TERM_ATTR_NORMAL;
     term_row = 0;
     term_col = 0;
     line_pos = 0;
-    term_print("Nyx OS Terminal v0.2 (VFS enabled)\n");
+    term_print("Solis OS Terminal v0.2 (VFS enabled)\n");
     term_print("Type 'help' for commands.\n");
     shell_prompt();
 }
@@ -649,7 +671,10 @@ void term_draw(int x, int y, int w, int h) {
             int bi = (start_row + r) * TERM_COLS + c;
             if (bi < TERM_BUF && term_buffer[bi]) {
                 char str[2] = {term_buffer[bi], '\0'};
-                graphics_draw_string(x + 4 + c * 8, y + 4 + r * 16, str, 0xFF00FF00);
+                uint32_t col = (term_attr[bi] == TERM_ATTR_PROMPT)
+                                   ? TERM_COL_ACCENT
+                                   : TERM_COL_TEXT;
+                graphics_draw_string(x + 4 + c * 8, y + 4 + r * 16, str, col);
             }
         }
     }

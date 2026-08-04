@@ -1,7 +1,7 @@
-#include <nyx/mouse.h>
-#include <nyx/ports.h>
-#include <nyx/pic.h>
-#include <nyx/idt.h>
+#include <solis/mouse.h>
+#include <solis/ports.h>
+#include <solis/pic.h>
+#include <solis/idt.h>
 
 static volatile int32_t mouse_dx = 0;
 static volatile int32_t mouse_dy = 0;

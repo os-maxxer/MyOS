@@ -1,5 +1,5 @@
-#include <nyx/apic.h>
-#include <nyx/ports.h>
+#include <solis/apic.h>
+#include <solis/ports.h>
 
 #define APIC_BASE 0xFEE00000
 

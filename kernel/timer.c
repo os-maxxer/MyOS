@@ -1,7 +1,7 @@
-#include <nyx/timer.h>
-#include <nyx/ports.h>
-#include <nyx/idt.h>
-#include <nyx/pic.h>
+#include <solis/timer.h>
+#include <solis/ports.h>
+#include <solis/idt.h>
+#include <solis/pic.h>
 
 #define PIT_COMMAND  0x43
 #define PIT_CHANNEL0 0x40

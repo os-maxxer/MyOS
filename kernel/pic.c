@@ -2,8 +2,8 @@
  * Programmable interrupt controller setup.
  */
 
-#include <nyx/pic.h>
-#include <nyx/ports.h>
+#include <solis/pic.h>
+#include <solis/ports.h>
 
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA 0x21

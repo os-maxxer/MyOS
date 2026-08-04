@@ -123,7 +123,8 @@ irq_common_stub:
     pop es
     pop ds
     popa
-    mov eax, [esp]
+    push eax
+    mov eax, [esp+4]
     cmp eax, 40
     jb .done
     mov al, 0x20
@@ -134,6 +135,7 @@ irq_common_stub:
     mov al, 0x20
     out 0x20, al
 .skip:
+    pop eax
     add esp, 8
     iret
 

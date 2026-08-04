@@ -2,9 +2,10 @@
  * Basic framebuffer graphics backend.
  */
 
-#include <nyx/graphics.h>
-#include <nyx/console.h>
-#include <nyx/multiboot2.h>
+#include <solis/graphics.h>
+#include <solis/multiboot2.h>
+#include <solis/ports.h>
+#include <solis/console.h>
 #include <stddef.h>
 
 static struct framebuffer_info framebuffer = {0};
@@ -21,14 +22,25 @@ static void framebuffer_set_pixel(uint32_t x, uint32_t y, uint32_t color) {
 
     uint8_t *pixel = framebuffer_data + y * framebuffer.pitch + x * framebuffer.bytes_per_pixel;
     switch (framebuffer.bytes_per_pixel) {
-        case 4:
-            *(uint32_t *)pixel = color;
-            break;
-        case 3:
+        case 4: {
             pixel[0] = (uint8_t)(color & 0xFF);
             pixel[1] = (uint8_t)((color >> 8) & 0xFF);
             pixel[2] = (uint8_t)((color >> 16) & 0xFF);
+            pixel[3] = (uint8_t)(color >> 24);
             break;
+        }
+        case 3: {
+            uint32_t r = (color >> 16) & 0xFF;
+            uint32_t g = (color >> 8) & 0xFF;
+            uint32_t b = color & 0xFF;
+            uint32_t val = (r << framebuffer.red_field_position) |
+                           (g << framebuffer.green_field_position) |
+                           (b << framebuffer.blue_field_position);
+            pixel[0] = (uint8_t)val;
+            pixel[1] = (uint8_t)(val >> 8);
+            pixel[2] = (uint8_t)(val >> 16);
+            break;
+        }
         case 2:
             pixel[0] = (uint8_t)(color & 0xFF);
             pixel[1] = (uint8_t)((color >> 8) & 0xFF);
@@ -39,6 +51,10 @@ static void framebuffer_set_pixel(uint32_t x, uint32_t y, uint32_t color) {
         default:
             break;
     }
+}
+
+static inline void framebuffer_put32(uint32_t x, uint32_t y, uint32_t color) {
+    *(volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch + x * 4) = color;
 }
 
 static void *get_multiboot_tag(uint32_t multiboot_info, uint32_t type) {
@@ -81,16 +97,22 @@ void graphics_init(uint32_t multiboot_info) {
     framebuffer_width = framebuffer.width;
     framebuffer_height = framebuffer.height;
 
-    console_write("[FB] Framebuffer at 0x");
+    framebuffer.red_field_position = framebuffer_tag->framebuffer_red_field_position;
+    framebuffer.green_field_position = framebuffer_tag->framebuffer_green_field_position;
+    framebuffer.blue_field_position = framebuffer_tag->framebuffer_blue_field_position;
+
+    console_write("[FB] addr=");
     console_write_hex((uint32_t)(uintptr_t)framebuffer.address);
-    console_write(", ");
+    console_write(" w=");
     console_write_dec(framebuffer.width);
-    console_write("x");
+    console_write(" h=");
     console_write_dec(framebuffer.height);
-    console_write(", ");
+    console_write(" bpp=");
     console_write_dec(framebuffer.bpp);
-    console_write(" bpp, pitch ");
+    console_write(" pitch=");
     console_write_dec(framebuffer.pitch);
+    console_write(" bpp4=");
+    console_write_dec(framebuffer.bytes_per_pixel);
     console_write("\n");
 }
 
@@ -103,9 +125,20 @@ void graphics_clear(uint32_t color) {
         return;
     }
     bg_color = color;
-    for (uint32_t y = 0; y < framebuffer_height; ++y) {
-        for (uint32_t x = 0; x < framebuffer_width; ++x) {
-            framebuffer_set_pixel(x, y, color);
+    if (framebuffer.bytes_per_pixel == 4) {
+        volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data);
+        uint32_t pitch_words = framebuffer.pitch / 4;
+        for (uint32_t y = 0; y < framebuffer_height; ++y) {
+            for (uint32_t x = 0; x < framebuffer_width; ++x) {
+                row[x] = color;
+            }
+            row += pitch_words;
+        }
+    } else {
+        for (uint32_t y = 0; y < framebuffer_height; ++y) {
+            for (uint32_t x = 0; x < framebuffer_width; ++x) {
+                framebuffer_set_pixel(x, y, color);
+            }
         }
     }
 }
@@ -117,10 +150,25 @@ void graphics_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
 uint32_t graphics_get_pixel(uint32_t x, uint32_t y) {
     if (!framebuffer.present || x >= framebuffer_width || y >= framebuffer_height)
         return 0;
+    if (framebuffer.bytes_per_pixel == 4) {
+        return *(volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch + x * 4);
+    }
     uint8_t *pixel = framebuffer_data + y * framebuffer.pitch + x * framebuffer.bytes_per_pixel;
     switch (framebuffer.bytes_per_pixel) {
-        case 4: return *(uint32_t *)pixel;
-        case 3: return (uint32_t)pixel[0] | ((uint32_t)pixel[1] << 8) | ((uint32_t)pixel[2] << 16);
+        case 4: {
+            uint32_t val = *(uint32_t *)pixel;
+            uint32_t r = (val >> framebuffer.red_field_position) & 0xFF;
+            uint32_t g = (val >> framebuffer.green_field_position) & 0xFF;
+            uint32_t b = (val >> framebuffer.blue_field_position) & 0xFF;
+            return 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
+        case 3: {
+            uint32_t val = (uint32_t)pixel[0] | ((uint32_t)pixel[1] << 8) | ((uint32_t)pixel[2] << 16);
+            uint32_t r = (val >> framebuffer.red_field_position) & 0xFF;
+            uint32_t g = (val >> framebuffer.green_field_position) & 0xFF;
+            uint32_t b = (val >> framebuffer.blue_field_position) & 0xFF;
+            return 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
         case 2: return (uint32_t)pixel[0] | ((uint32_t)pixel[1] << 8);
         case 1: return pixel[0];
         default: return 0;
@@ -128,9 +176,23 @@ uint32_t graphics_get_pixel(uint32_t x, uint32_t y) {
 }
 
 void graphics_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
-    for (uint32_t row = y; row < y + height && row < framebuffer_height; ++row) {
-        for (uint32_t col = x; col < x + width && col < framebuffer_width; ++col) {
-            framebuffer_set_pixel(col, row, color);
+    if (!framebuffer.present || width == 0 || height == 0) return;
+    if (x >= framebuffer_width || y >= framebuffer_height) return;
+    if (x + width > framebuffer_width) width = framebuffer_width - x;
+    if (y + height > framebuffer_height) height = framebuffer_height - y;
+
+    if (framebuffer.bytes_per_pixel == 4) {
+        volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x;
+        uint32_t pitch_words = framebuffer.pitch / 4;
+        for (uint32_t r = 0; r < height; r++) {
+            for (uint32_t c = 0; c < width; c++) row[c] = color;
+            row += pitch_words;
+        }
+    } else {
+        for (uint32_t row = y; row < y + height; ++row) {
+            for (uint32_t col = x; col < x + width; ++col) {
+                framebuffer_set_pixel(col, row, color);
+            }
         }
     }
 }
@@ -246,6 +308,7 @@ void graphics_draw_string(uint32_t x, uint32_t y, const char *text, uint32_t col
     }
     uint32_t px = x;
     uint32_t py = y;
+    bool fast = (framebuffer.bytes_per_pixel == 4);
     for (const char *p = text; *p != '\0'; ++p) {
         if (*p == '\n') {
             py += 16;
@@ -264,7 +327,8 @@ void graphics_draw_string(uint32_t x, uint32_t y, const char *text, uint32_t col
             uint8_t bits = font8x16[ch][row];
             for (uint32_t col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
-                    graphics_put_pixel(px + col, py + row, color);
+                    if (fast) framebuffer_put32(px + col, py + row, color);
+                    else framebuffer_set_pixel(px + col, py + row, color);
                 }
             }
         }
@@ -274,10 +338,32 @@ void graphics_draw_string(uint32_t x, uint32_t y, const char *text, uint32_t col
 
 uint32_t graphics_get_width(void) {
     return framebuffer_width;
+}uint32_t graphics_get_height(void) {
+    return framebuffer_height;
 }
 
-uint32_t graphics_get_height(void) {
-    return framebuffer_height;
+void graphics_blit_rgb(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                       uint32_t src_w, const uint32_t *pixels) {
+    if (!framebuffer.present || w == 0 || h == 0 || pixels == 0) return;
+    if (x >= framebuffer_width || y >= framebuffer_height) return;
+    if (x + w > framebuffer_width) w = framebuffer_width - x;
+    if (y + h > framebuffer_height) h = framebuffer_height - y;
+
+    if (framebuffer.bytes_per_pixel == 4) {
+        volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x;
+        uint32_t pitch_words = framebuffer.pitch / 4;
+        for (uint32_t r = 0; r < h; r++) {
+            const uint32_t *src = pixels + (uint32_t)r * src_w;
+            for (uint32_t c = 0; c < w; c++) row[c] = src[c];
+            row += pitch_words;
+        }
+    } else {
+        for (uint32_t r = 0; r < h; r++) {
+            for (uint32_t c = 0; c < w; c++) {
+                graphics_put_pixel(x + c, y + r, pixels[r * src_w + c]);
+            }
+        }
+    }
 }
 
 void graphics_draw_mouse_cursor(uint32_t x, uint32_t y, uint32_t color) {
@@ -366,6 +452,24 @@ void graphics_fill_gradient_v(uint32_t x, uint32_t y, uint32_t w, uint32_t h, ui
 }
 
 void graphics_fill_circle(uint32_t cx, uint32_t cy, uint32_t r, uint32_t color) {
+    if (!framebuffer.present) return;
+    if (framebuffer.bytes_per_pixel == 4) {
+        for (int32_t dy = -(int32_t)r; dy <= (int32_t)r; dy++) {
+            int32_t ady = dy < 0 ? -dy : dy;
+            int32_t adx = 0;
+            while ((adx + 1) * (adx + 1) + ady * ady <= (int32_t)(r * r)) adx++;
+            uint32_t y = (uint32_t)((int32_t)cy + dy);
+            if (y >= framebuffer_height) continue;
+            uint32_t x0 = (adx > (int32_t)cx) ? 0 : (cx - (uint32_t)adx);
+            uint32_t x1 = cx + (uint32_t)adx;
+            if (x1 >= framebuffer_width) x1 = framebuffer_width - 1;
+            if (x1 >= x0) {
+                volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x0;
+                for (uint32_t c = x0; c <= x1; c++) row[c - x0] = color;
+            }
+        }
+        return;
+    }
     for (uint32_t dy = 0; dy <= r; dy++) {
         for (uint32_t dx = 0; dx <= r; dx++) {
             if (dx * dx + dy * dy <= r * r) {
@@ -388,4 +492,41 @@ void graphics_draw_circle(uint32_t cx, uint32_t cy, uint32_t r, uint32_t color) 
             }
         }
     }
+}
+
+#define VBE_DISPI_IOPORT_INDEX 0x01CE
+#define VBE_DISPI_IOPORT_DATA  0x01CF
+
+#define VBE_DISPI_INDEX_ID              0
+#define VBE_DISPI_INDEX_XRES            1
+#define VBE_DISPI_INDEX_YRES            2
+#define VBE_DISPI_INDEX_BPP             3
+#define VBE_DISPI_INDEX_ENABLE          4
+
+#define VBE_DISPI_DISABLED              0x00
+#define VBE_DISPI_ENABLED               0x01
+#define VBE_DISPI_LFB_ENABLED           0x40
+#define VBE_DISPI_NOCLEARMEM            0x80
+
+void graphics_vbe_init(void) {
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_ID);
+    outw(VBE_DISPI_IOPORT_DATA, 0xB0C5);
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_ID);
+    uint16_t id = inw(VBE_DISPI_IOPORT_DATA);
+    if (id != 0xB0C5) {
+        return;
+    }
+
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_ENABLE);
+    outw(VBE_DISPI_IOPORT_DATA, VBE_DISPI_DISABLED);
+
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_XRES);
+    outw(VBE_DISPI_IOPORT_DATA, (uint16_t)framebuffer_width);
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_YRES);
+    outw(VBE_DISPI_IOPORT_DATA, (uint16_t)framebuffer_height);
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_BPP);
+    outw(VBE_DISPI_IOPORT_DATA, (uint16_t)framebuffer.bpp);
+
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_ENABLE);
+    outw(VBE_DISPI_IOPORT_DATA, VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
 }

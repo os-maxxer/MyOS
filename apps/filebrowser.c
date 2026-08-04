@@ -1,6 +1,6 @@
-#include <nyx/apps/filebrowser.h>
-#include <nyx/graphics.h>
-#include <nyx/vfs.h>
+#include <solis/apps/filebrowser.h>
+#include <solis/graphics.h>
+#include <solis/vfs.h>
 #include <stdbool.h>
 
 #define SIDEBAR_W 150
@@ -10,7 +10,7 @@
 #define PATH_MAX 64
 
 static char current_path[PATH_MAX];
-static char entries[NOFS_MAX_FILES][NOFS_MAX_NAME];
+static char entries[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
 static int  entry_count = 0;
 static int  selected = -1;
 static int  scroll_offset = 0;
@@ -48,7 +48,7 @@ void filebrowser_init(void) {
 }
 
 static void refresh_list(void) {
-    entry_count = vfs_ls_at(current_path, entries, NOFS_MAX_FILES);
+    entry_count = vfs_ls_at(current_path, entries, SOLFS_MAX_FILES);
     if (selected >= entry_count) selected = -1;
 }
 

@@ -1,6 +1,6 @@
-#include <nyx/ata.h>
-#include <nyx/ports.h>
-#include <nyx/console.h>
+#include <solis/ata.h>
+#include <solis/ports.h>
+#include <solis/console.h>
 
 #define ATA_DATA     0x1F0
 #define ATA_ERROR    0x1F1
@@ -75,7 +75,6 @@ bool ata_init(void) {
     }
 
     disk_present = true;
-    console_write("ATA: primary master detected.\n");
     return true;
 }
 

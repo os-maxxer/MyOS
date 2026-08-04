@@ -1,6 +1,6 @@
-#include <nyx/vfs.h>
-#include <nyx/nofs.h>
-#include <nyx/console.h>
+#include <solis/vfs.h>
+#include <solis/solfs.h>
+#include <solis/console.h>
 #include <stdbool.h>
 
 #define VFS_MAX_PATH 64
@@ -35,14 +35,14 @@ static bool starts_with(const char *s, const char *pre) {
 
 static bool dir_exists(const char *path) {
     if (str_eq(path, "/")) return true;
-    char flat[NOFS_MAX_NAME];
+    char flat[SOLFS_MAX_NAME];
     int pi = 0;
-    for (int i = 1; path[i] && pi < NOFS_MAX_NAME - 1; i++)
+    for (int i = 1; path[i] && pi < SOLFS_MAX_NAME - 1; i++)
         flat[pi++] = path[i];
     flat[pi] = '\0';
-    int fd = nofs_open(flat);
+    int fd = solfs_open(flat);
     if (fd < 0) return false;
-    return nofs_isdir(fd) == 1;
+    return solfs_isdir(fd) == 1;
 }
 
 static void resolve_path(const char *base, const char *input, char *out, int max) {
@@ -121,11 +121,10 @@ static void resolve_path(const char *base, const char *input, char *out, int max
 
 void vfs_init(void) {
     str_cpy(cwd, "/home", VFS_MAX_PATH);
-    nofs_mkdir("home");
-    nofs_mkdir("docs");
-    nofs_mkdir("downloads");
-    nofs_mkdir("desktop");
-    console_write("[VFS] initialized: /home, /docs, /downloads, /desktop\n");
+    solfs_mkdir("home");
+    solfs_mkdir("docs");
+    solfs_mkdir("downloads");
+    solfs_mkdir("desktop");
 }
 
 const char* vfs_get_cwd(void) {
@@ -153,29 +152,29 @@ int vfs_mkdir(const char *path) {
 
     if (dir_exists(target)) return -1;
 
-    char flat[NOFS_MAX_NAME];
+    char flat[SOLFS_MAX_NAME];
     int pi = 0;
-    for (int i = 1; target[i] && pi < NOFS_MAX_NAME - 1; i++)
+    for (int i = 1; target[i] && pi < SOLFS_MAX_NAME - 1; i++)
         flat[pi++] = target[i];
     flat[pi] = '\0';
-    if (nofs_mkdir(flat) < 0) return -1;
+    if (solfs_mkdir(flat) < 0) return -1;
     return 0;
 }
 
-int vfs_ls(char names[][NOFS_MAX_NAME], int max) {
+int vfs_ls(char names[][SOLFS_MAX_NAME], int max) {
     return vfs_ls_at(cwd, names, max);
 }
 
-int vfs_ls_at(const char *path, char names[][NOFS_MAX_NAME], int max) {
-    char all[NOFS_MAX_FILES][NOFS_MAX_NAME];
-    int count = nofs_list(all, NOFS_MAX_FILES);
+int vfs_ls_at(const char *path, char names[][SOLFS_MAX_NAME], int max) {
+    char all[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
+    int count = solfs_list(all, SOLFS_MAX_FILES);
     int out = 0;
     int path_len = str_len(path);
 
     for (int i = 0; i < count && out < max; i++) {
         bool is_dir_entry = false;
-        int fd = nofs_open(all[i]);
-        if (fd >= 0 && nofs_isdir(fd) == 1)
+        int fd = solfs_open(all[i]);
+        if (fd >= 0 && solfs_isdir(fd) == 1)
             is_dir_entry = true;
 
         if (str_eq(path, "/")) {
@@ -184,15 +183,15 @@ int vfs_ls_at(const char *path, char names[][NOFS_MAX_NAME], int max) {
                 if (all[i][j] == '/') { has_slash = true; break; }
             }
             if (is_dir_entry) {
-                str_cpy(names[out], all[i], NOFS_MAX_NAME);
+                str_cpy(names[out], all[i], SOLFS_MAX_NAME);
                 int nl = str_len(names[out]);
-                if (nl > 0 && nl < NOFS_MAX_NAME - 1) {
+                if (nl > 0 && nl < SOLFS_MAX_NAME - 1) {
                     names[out][nl] = '/';
                     names[out][nl + 1] = '\0';
                 }
                 out++;
             } else if (!has_slash) {
-                str_cpy(names[out], all[i], NOFS_MAX_NAME);
+                str_cpy(names[out], all[i], SOLFS_MAX_NAME);
                 out++;
             }
         } else if (starts_with(all[i], path) && all[i][path_len] == '/') {
@@ -205,10 +204,10 @@ int vfs_ls_at(const char *path, char names[][NOFS_MAX_NAME], int max) {
                 continue;
             }
             if (!sub && rest[0]) {
-                str_cpy(names[out], rest, NOFS_MAX_NAME);
+                str_cpy(names[out], rest, SOLFS_MAX_NAME);
                 if (is_dir_entry) {
                     int nl = str_len(names[out]);
-                    if (nl > 0 && nl < NOFS_MAX_NAME - 1) {
+                    if (nl > 0 && nl < SOLFS_MAX_NAME - 1) {
                         names[out][nl] = '/';
                         names[out][nl + 1] = '\0';
                     }
@@ -220,7 +219,7 @@ int vfs_ls_at(const char *path, char names[][NOFS_MAX_NAME], int max) {
     return out;
 }
 
-static void make_nofs_name(const char *path, char *out, int max) {
+static void make_solfs_name(const char *path, char *out, int max) {
     char resolved[VFS_MAX_PATH];
     resolve_path(cwd, path, resolved, VFS_MAX_PATH);
 
@@ -239,8 +238,8 @@ static void make_nofs_name(const char *path, char *out, int max) {
 }
 
 int vfs_create(const char *path) {
-    char flat[NOFS_MAX_NAME];
-    make_nofs_name(path, flat, NOFS_MAX_NAME);
+    char flat[SOLFS_MAX_NAME];
+    make_solfs_name(path, flat, SOLFS_MAX_NAME);
     if (!flat[0]) return -1;
     char parent[VFS_MAX_PATH];
     int last = -1;
@@ -255,31 +254,31 @@ int vfs_create(const char *path) {
         parent[pi] = '\0';
         if (!dir_exists(parent)) return -1;
     }
-    return nofs_create(flat);
+    return solfs_create(flat);
 }
 
 int vfs_open(const char *path) {
-    char flat[NOFS_MAX_NAME];
-    make_nofs_name(path, flat, NOFS_MAX_NAME);
+    char flat[SOLFS_MAX_NAME];
+    make_solfs_name(path, flat, SOLFS_MAX_NAME);
     if (!flat[0]) return -1;
-    return nofs_open(flat);
+    return solfs_open(flat);
 }
 
 int vfs_read(int fd, uint8_t *buf, uint32_t size) {
-    return nofs_read(fd, buf, size);
+    return solfs_read(fd, buf, size);
 }
 
 int vfs_write(int fd, const uint8_t *buf, uint32_t size) {
-    return nofs_write(fd, buf, size);
+    return solfs_write(fd, buf, size);
 }
 
 int vfs_delete(const char *path) {
-    char flat[NOFS_MAX_NAME];
-    make_nofs_name(path, flat, NOFS_MAX_NAME);
+    char flat[SOLFS_MAX_NAME];
+    make_solfs_name(path, flat, SOLFS_MAX_NAME);
     if (!flat[0]) return -1;
-    return nofs_delete(flat);
+    return solfs_delete(flat);
 }
 
 int vfs_get_size(int fd) {
-    return nofs_get_size(fd);
+    return solfs_get_size(fd);
 }

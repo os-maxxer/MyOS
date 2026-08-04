@@ -1,7 +1,7 @@
-#include <nyx/i2c.h>
-#include <nyx/pci.h>
-#include <nyx/ports.h>
-#include <nyx/console.h>
+#include <solis/i2c.h>
+#include <solis/pci.h>
+#include <solis/ports.h>
+#include <solis/console.h>
 
 #define SMBUS_HST_STS      0x00
 #define SMBUS_HST_CNT      0x02
@@ -95,7 +95,6 @@ void i2c_init(void) {
         }
     }
     if (slot == 0xFFFF) {
-        console_write("I2C: no SMBus controller found\n");
         return;
     }
 
@@ -105,18 +104,6 @@ void i2c_init(void) {
         bar = pci_get_bar(0, slot, 0, 0);
         smbus_io_base = bar & 0xFFFE;
     }
-
-    console_write("I2C: SMBus controller at IO 0x");
-    char hex[8];
-    int hi = 0;
-    uint16_t tmp = smbus_io_base;
-    for (int i = 0; i < 4; i++) {
-        uint8_t nib = (tmp >> (12 - i * 4)) & 0xF;
-        hex[hi++] = nib < 10 ? '0' + nib : 'A' + nib - 10;
-    }
-    hex[hi] = '\0';
-    console_write(hex);
-    console_write("\n");
 
     i2c_initialized = true;
 }

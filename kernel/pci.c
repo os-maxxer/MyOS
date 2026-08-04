@@ -1,5 +1,5 @@
-#include <nyx/pci.h>
-#include <nyx/ports.h>
+#include <solis/pci.h>
+#include <solis/ports.h>
 
 uint32_t pci_read_config(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
     uint32_t addr = 0x80000000 | (bus << 16) | (slot << 11) | (func << 8) | (offset & 0xFC);

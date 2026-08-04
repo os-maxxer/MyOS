@@ -1,6 +1,6 @@
-#include <nyx/graphics.h>
-#include <nyx/timer.h>
-#include <nyx/npx.h>
+#include <solis/graphics.h>
+#include <solis/timer.h>
+#include <solis/spx.h>
 #include <stdbool.h>
 
 #define LINE_H 16
@@ -160,8 +160,8 @@ void taskman_draw(int x, int y, int w, int h) {
     add_line("--------------------");
     add_line("Installed Apps:");
 
-    char app_names[NPX_MAX_APPS][NPX_NAME_LEN];
-    int count = npx_list_installed(app_names, NPX_MAX_APPS);
+    char app_names[SPX_MAX_APPS][SPX_NAME_LEN];
+    int count = spx_list_installed(app_names, SPX_MAX_APPS);
     if (count == 0) {
         add_line("  (none)");
     } else {

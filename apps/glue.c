@@ -1,5 +1,5 @@
-#include <nyx/syscall.h>
-#include <nyx/npx.h>
+#include <solis/syscall.h>
+#include <solis/spx.h>
 #include <stdbool.h>
 
 static const struct syscall_table *SYS = (const struct syscall_table *)SYSCALL_TABLE_ADDR;
@@ -66,26 +66,26 @@ int vfs_get_size(int fd) {
     return SYS->vfs_get_size(fd);
 }
 
-int nofs_list(char names[][24], int max) {
-    return SYS->nofs_list(names, max);
+int solfs_list(char names[][24], int max) {
+    return SYS->solfs_list(names, max);
 }
-int nofs_create(const char *name) {
-    return SYS->nofs_create(name);
+int solfs_create(const char *name) {
+    return SYS->solfs_create(name);
 }
-int nofs_open(const char *name) {
-    return SYS->nofs_open(name);
+int solfs_open(const char *name) {
+    return SYS->solfs_open(name);
 }
-int nofs_read(int fd, uint8_t *buf, uint32_t size) {
-    return SYS->nofs_read(fd, buf, size);
+int solfs_read(int fd, uint8_t *buf, uint32_t size) {
+    return SYS->solfs_read(fd, buf, size);
 }
-int nofs_write(int fd, const uint8_t *buf, uint32_t size) {
-    return SYS->nofs_write(fd, buf, size);
+int solfs_write(int fd, const uint8_t *buf, uint32_t size) {
+    return SYS->solfs_write(fd, buf, size);
 }
-int nofs_get_size(int fd) {
-    return SYS->nofs_get_size(fd);
+int solfs_get_size(int fd) {
+    return SYS->solfs_get_size(fd);
 }
-uint64_t nofs_get_machine_id(void) {
-    return SYS->nofs_get_machine_id();
+uint64_t solfs_get_machine_id(void) {
+    return SYS->solfs_get_machine_id();
 }
 
 uint32_t sys_get_total_ram(void) {
@@ -98,17 +98,17 @@ uint64_t sys_get_machine_id(void) {
     return SYS->sys_get_machine_id();
 }
 
-int npx_install(const uint8_t *data, uint32_t size) {
-    return SYS->npx_install(data, size);
+int spx_install(const uint8_t *data, uint32_t size) {
+    return SYS->spx_install(data, size);
 }
-int npx_uninstall(const char *name) {
-    return SYS->npx_uninstall(name);
+int spx_uninstall(const char *name) {
+    return SYS->spx_uninstall(name);
 }
-int npx_find_slot(const char *name) {
-    return SYS->npx_find_slot(name);
+int spx_find_slot(const char *name) {
+    return SYS->spx_find_slot(name);
 }
-int npx_list_installed(char names[][NPX_NAME_LEN], int max) {
-    return SYS->npx_list_installed(names, max);
+int spx_list_installed(char names[][SPX_NAME_LEN], int max) {
+    return SYS->spx_list_installed(names, max);
 }
 
 int gui_get_theme(void) {
@@ -155,6 +155,29 @@ int net_dns_resolve(const char *hostname, uint8_t *ip_out) {
 
 int dbg_read(char *buf, int max) {
     return SYS->dbg_read(buf, max);
+}
+
+void graphics_fill_circle(int cx, int cy, int r, uint32_t color) {
+    SYS->fill_circle(cx, cy, r, color);
+}
+
+void rtc_get_time(struct rtc_time *out) {
+    SYS->rtc_get_time(out);
+}
+void rtc_set_timezone(int index) {
+    SYS->rtc_set_timezone(index);
+}
+int rtc_get_timezone(void) {
+    return SYS->rtc_get_timezone();
+}
+int rtc_get_timezone_count(void) {
+    return SYS->rtc_get_timezone_count();
+}
+void rtc_get_timezone_name(int index, char *buf, int max_len) {
+    SYS->rtc_get_timezone_name(index, buf, max_len);
+}
+int rtc_get_timezone_offset(int index) {
+    return SYS->rtc_get_timezone_offset(index);
 }
 
 void _start(void) {

@@ -1,8 +1,8 @@
-#include <nyx/rtl8139.h>
-#include <nyx/pci.h>
-#include <nyx/ports.h>
-#include <nyx/console.h>
-#include <nyx/dbg.h>
+#include <solis/rtl8139.h>
+#include <solis/pci.h>
+#include <solis/ports.h>
+#include <solis/console.h>
+#include <solis/dbg.h>
 
 static uint16_t io = 0;
 static uint8_t rx_ring[RX_BUF_SIZE] __attribute__((aligned(4)));
@@ -67,10 +67,6 @@ int rtl8139_init(uint16_t io_base) {
     dbg_print("[RTL8139] CR=");
     dbg_print_hex(inb(io + RTL_REG_CR));
     dbg_print("\n");
-
-	console_write("[RTL8139] Initialized at IO 0x");
-	console_write_hex(io);
-	console_write("\n");
 
 	dbg_print("[RTL8139] RX ring first 64 bytes:");
 	for (int i = 0; i < 64; i++) {

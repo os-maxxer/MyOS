@@ -1,7 +1,7 @@
-#include <nyx/touchpad.h>
-#include <nyx/i2c.h>
-#include <nyx/console.h>
-#include <nyx/timer.h>
+#include <solis/touchpad.h>
+#include <solis/i2c.h>
+#include <solis/console.h>
+#include <solis/timer.h>
 
 #define HID_I2C_ADDR_1      0x15
 #define HID_I2C_ADDR_2      0x2C
@@ -68,29 +68,14 @@ void touchpad_init(void) {
 
     for (int i = 0; addrs[i]; i++) {
         if (detect_touchpad_at(addrs[i])) {
-            console_write("Touchpad: found HID device at 0x");
-            char hex[4];
-            int hi = 0;
-            uint16_t a = addrs[i];
-            uint8_t n1 = (a >> 4) & 0xF;
-            uint8_t n2 = a & 0xF;
-            hex[hi++] = n1 < 10 ? '0' + n1 : 'A' + n1 - 10;
-            hex[hi++] = n2 < 10 ? '0' + n2 : 'A' + n2 - 10;
-            hex[hi] = '\0';
-            console_write(hex);
-            console_write("\n");
-
             if (touchpad_reset() == 0) {
                 i2c_smbus_write_byte(touchpad_address, HID_REG_COMMAND, HID_CMD_SET_POWER | (HID_POWER_ON << 4));
                 touchpad_found = true;
                 touchpad_initialized = true;
-                console_write("Touchpad: initialized\n");
                 return;
             }
         }
     }
-
-    console_write("Touchpad: no HID device found\n");
 }
 
 static unsigned int report_buf[REPORT_BUF_SIZE];

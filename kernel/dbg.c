@@ -1,5 +1,5 @@
-#include <nyx/dbg.h>
-#include <nyx/ports.h>
+#include <solis/dbg.h>
+#include <solis/ports.h>
 
 #define DBG_BUF_SIZE 4096
 static char dbg_buf[DBG_BUF_SIZE];

@@ -12,8 +12,8 @@ SECTIONS {
         *(.rodata*)
     }
 
-    .npx_apps ALIGN(4K) : {
-        *(.npx_apps*)
+    .spx_apps ALIGN(4K) : {
+        *(.spx_apps*)
     }
 
     .data ALIGN(4K) : {

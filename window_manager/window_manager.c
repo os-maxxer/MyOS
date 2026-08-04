@@ -2,8 +2,8 @@
  * Window manager facade for Milestone 3.
  */
 
-#include <nyx/window_manager.h>
-#include <nyx/gui.h>
+#include <solis/window_manager.h>
+#include <solis/gui.h>
 
 void window_manager_init(void) {
     gui_init();

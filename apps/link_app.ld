@@ -3,7 +3,7 @@ SECTIONS
     PROVIDE(BASE = 0x01000000);
     . = BASE;
     .text : {
-        *(.npx_exports)
+        *(.spx_exports)
         *(.text*)
         *(.rodata*)
         *(.data*)

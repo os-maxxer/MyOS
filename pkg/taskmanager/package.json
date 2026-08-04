@@ -2,9 +2,9 @@
     "name": "taskmanager",
     "version": "1.0.0",
     "description": "System monitor showing CPU, RAM, uptime and installed apps",
-    "author": "Nyx OS",
+    "author": "Solis OS",
     "license": "MIT",
-    "npx": "taskmanager.npx",
-    "source": ["taskmanager.c", "taskmanager_npx.c"],
+    "spx": "taskmanager.spx",
+    "source": ["taskmanager.c", "taskmanager_spx.c"],
     "dependencies": []
 }

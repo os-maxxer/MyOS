@@ -1,7 +1,8 @@
-#include <nyx/keyboard.h>
-#include <nyx/ports.h>
-#include <nyx/pic.h>
-#include <nyx/idt.h>
+#include <solis/keyboard.h>
+#include <solis/ports.h>
+#include <solis/pic.h>
+#include <solis/idt.h>
+#include <solis/console.h>
 
 #define KEYBOARD_DATA_PORT 0x60
 #define KEYBOARD_STATUS_PORT 0x64
@@ -17,6 +18,7 @@ static bool alt_pressed = false;
 static bool caps_lock = false;
 static bool extended = false;
 static volatile bool start_menu_pressed = false;
+static volatile int func_key_pressed = 0;
 
 static const char scancode_ascii_normal[128] = {
     0,   0x1b,'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b','\t',
@@ -44,6 +46,10 @@ static void keyboard_handler(void) {
     }
 
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
+
+    console_write("[KBD] ");
+    console_write_hex(scancode);
+    console_write("\n");
 
     if (scancode == 0xE0) {
         extended = true;
@@ -83,6 +89,21 @@ static void keyboard_handler(void) {
         pic_send_eoi(1);
         return;
     }
+    if (scancode >= 0x3B && scancode <= 0x44) {
+        if (!released) func_key_pressed = scancode - 0x3B + 1;
+        pic_send_eoi(1);
+        return;
+    }
+    if (scancode == 0x57) {
+        if (!released) func_key_pressed = 11;
+        pic_send_eoi(1);
+        return;
+    }
+    if (scancode == 0x58) {
+        if (!released) func_key_pressed = 12;
+        pic_send_eoi(1);
+        return;
+    }
 
     if (released) {
         pic_send_eoi(1);
@@ -113,6 +134,12 @@ static void keyboard_handler(void) {
 bool keyboard_was_start_menu_pressed(void) {
     bool ret = start_menu_pressed;
     start_menu_pressed = false;
+    return ret;
+}
+
+int keyboard_consume_func_key(void) {
+    int ret = func_key_pressed;
+    func_key_pressed = 0;
     return ret;
 }
 

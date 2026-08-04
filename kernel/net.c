@@ -1,9 +1,9 @@
-#include <nyx/net.h>
-#include <nyx/rtl8139.h>
-#include <nyx/pci.h>
-#include <nyx/timer.h>
-#include <nyx/console.h>
-#include <nyx/dbg.h>
+#include <solis/net.h>
+#include <solis/rtl8139.h>
+#include <solis/pci.h>
+#include <solis/timer.h>
+#include <solis/console.h>
+#include <solis/dbg.h>
 
 #define HTONS(x) __builtin_bswap16(x)
 #define HTONL(x) __builtin_bswap32(x)
@@ -846,7 +846,6 @@ int net_dns_resolve(const char *hostname, uint8_t *ip_out) {
 int net_init(void) {
     uint16_t slot = pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID);
     if (slot == 0xFFFF) {
-        console_write("[NET] No RTL8139 found\n");
         return -1;
     }
 
@@ -856,18 +855,9 @@ int net_init(void) {
     rtl8139_init(io_base);
     rtl8139_get_mac(our_mac);
 
-    console_write("[NET] MAC: ");
-    for (int i = 0; i < 6; i++) {
-        console_write_hex(our_mac[i]);
-        if (i < 5) console_write(":");
-    }
-    console_write("\n");
-
     our_ip[0] = 10; our_ip[1] = 0; our_ip[2] = 2; our_ip[3] = 15;
     gateway_ip[0] = 10; gateway_ip[1] = 0; gateway_ip[2] = 2; gateway_ip[3] = 2;
     netmask[0] = 255; netmask[1] = 255; netmask[2] = 255; netmask[3] = 0;
-
-    console_write("[NET] IP: 10.0.2.15 GW: 10.0.2.2\n");
 
     net_ready = 1;
     return 0;

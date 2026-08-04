@@ -1,6 +1,6 @@
-#include <nyx/apps/notepad.h>
-#include <nyx/graphics.h>
-#include <nyx/nofs.h>
+#include <solis/apps/notepad.h>
+#include <solis/graphics.h>
+#include <solis/solfs.h>
 
 #define NOTE_COLS 60
 #define NOTE_ROWS 20
@@ -15,7 +15,7 @@ static int status_ticks = 0;
 
 static bool load_panel_open = false;
 static int load_file_count = 0;
-static char load_file_names[NOFS_MAX_FILES][NOFS_MAX_NAME];
+static char load_file_names[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
 
 void notepad_init(void) {
     for (int i = 0; i < NOTE_BUF; i++)
@@ -37,8 +37,8 @@ static void notepad_scroll(void) {
 }
 
 static int next_note_number(void) {
-    char names[NOFS_MAX_FILES][NOFS_MAX_NAME];
-    int count = nofs_list(names, NOFS_MAX_FILES);
+    char names[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
+    int count = solfs_list(names, SOLFS_MAX_FILES);
     int max_n = 0;
     for (int i = 0; i < count; i++) {
         if (names[i][0] == 'N' && names[i][1] == 'o' &&
@@ -73,11 +73,11 @@ static void save_note(void) {
     while (ri > 0) fname[fi++] = rev[--ri];
     fname[fi] = '\0';
 
-    int fd = nofs_create(fname);
+    int fd = solfs_create(fname);
     if (fd >= 0) {
         int len = NOTE_BUF;
         while (len > 0 && note_buffer[len - 1] == ' ') len--;
-        nofs_write(fd, (const uint8_t*)note_buffer, len);
+        solfs_write(fd, (const uint8_t*)note_buffer, len);
     }
 
     char msg[40];
@@ -99,16 +99,16 @@ static void new_note(void) {
 }
 
 static void load_note(const char *name) {
-    int fd = nofs_open(name);
+    int fd = solfs_open(name);
     if (fd < 0) { set_status("Can't open file"); return; }
-    int sz = nofs_get_size(fd);
+    int sz = solfs_get_size(fd);
     if (sz > NOTE_BUF) sz = NOTE_BUF;
 
     for (int i = 0; i < NOTE_BUF; i++)
         note_buffer[i] = ' ';
 
     uint8_t buf[NOTE_BUF];
-    int read = nofs_read(fd, buf, sz);
+    int read = solfs_read(fd, buf, sz);
 
     int pos = 0;
     int row = 0;
@@ -148,7 +148,7 @@ static void load_note(const char *name) {
 }
 
 static void refresh_file_list(void) {
-    load_file_count = nofs_list(load_file_names, NOFS_MAX_FILES);
+    load_file_count = solfs_list(load_file_names, SOLFS_MAX_FILES);
 }
 
 void notepad_draw(int x, int y, int w, int h) {

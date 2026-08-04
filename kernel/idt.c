@@ -2,9 +2,9 @@
  * Interrupt descriptor table setup and common interrupt handling.
  */
 
-#include <nyx/idt.h>
-#include <nyx/console.h>
-#include <nyx/interrupts.h>
+#include <solis/idt.h>
+#include <solis/console.h>
+#include <solis/interrupts.h>
 
 struct idt_entry {
     uint16_t base_low;

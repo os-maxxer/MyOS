@@ -1,12 +1,12 @@
-#include <nyx/bmp.h>
-#include <nyx/graphics.h>
-#include <nyx/vfs.h>
-#include <nyx/console.h>
+#include <solis/bmp.h>
+#include <solis/graphics.h>
+#include <solis/vfs.h>
+#include <solis/console.h>
 
 #define BMP_MAX_FILE_SIZE (3 * 1024 * 1024)
 
-#define WALLPAPER_MAX_W 1920
-#define WALLPAPER_MAX_H 1200
+#define WALLPAPER_MAX_W 1024
+#define WALLPAPER_MAX_H 768
 
 static uint8_t  bmp_file_buf[BMP_MAX_FILE_SIZE];
 static uint32_t wallpaper_cache[WALLPAPER_MAX_W * WALLPAPER_MAX_H];
@@ -103,12 +103,10 @@ void bmp_blit_wallpaper(void) {
 
     uint32_t fb_w = graphics_get_width();
     uint32_t fb_h = graphics_get_height();
+    uint32_t w = (wallpaper_w < fb_w) ? wallpaper_w : fb_w;
+    uint32_t h = (wallpaper_h < fb_h) ? wallpaper_h : fb_h;
 
-    for (uint32_t y = 0; y < wallpaper_h && y < fb_h; y++) {
-        for (uint32_t x = 0; x < wallpaper_w && x < fb_w; x++) {
-            graphics_put_pixel(x, y, wallpaper_cache[y * wallpaper_w + x]);
-        }
-    }
+    graphics_blit_rgb(0, 0, w, h, wallpaper_w, wallpaper_cache);
 }
 
 int bmp_is_wallpaper_loaded(void) {

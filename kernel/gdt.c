@@ -2,7 +2,7 @@
  * Global descriptor table setup for the i386 kernel.
  */
 
-#include <nyx/gdt.h>
+#include <solis/gdt.h>
 
 struct gdt_entry {
     uint16_t limit_low;

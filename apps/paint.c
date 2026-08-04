@@ -1,5 +1,5 @@
-#include <nyx/apps/paint.h>
-#include <nyx/graphics.h>
+#include <solis/apps/paint.h>
+#include <solis/graphics.h>
 
 #define CANVAS_W 640
 #define CANVAS_H 400

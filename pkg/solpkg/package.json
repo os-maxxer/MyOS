@@ -1,0 +1,10 @@
+{
+    "name": "solpkg",
+    "version": "1.0.0",
+    "description": "Solis Package Manager - install, purge, and search packages",
+    "author": "Solis OS",
+    "license": "MIT",
+    "spx": "solpkg.spx",
+    "source": ["pkg.c", "pkg_spx.c"],
+    "dependencies": []
+}

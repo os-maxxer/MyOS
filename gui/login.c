@@ -1,14 +1,21 @@
-#include <nyx/login.h>
-#include <nyx/graphics.h>
-#include <nyx/mouse.h>
-#include <nyx/keyboard.h>
+#include <solis/login.h>
+#include <solis/graphics.h>
+#include <solis/mouse.h>
+#include <solis/keyboard.h>
 
 #define PANEL_W 380
 #define PANEL_H 300
 #define BTN_W 200
 #define BTN_H 44
-#define PANEL_R 12
-#define BTN_R 8
+
+#define C_BG_TOP   0xFF2C2F33
+#define C_BG_BOT   0xFF17181B
+#define C_PANEL    0xFF24272B
+#define C_PANEL_LN 0xFF1B1E22
+#define C_TEXT     0xFFEAEAEA
+#define C_TEXT_DIM 0xFF888888
+#define C_ACTIVE   0xFF4C7BD9
+#define C_ACTIVE_DK 0xFF3A63B3
 
 static int mouse_x = 512;
 static int mouse_y = 384;
@@ -29,27 +36,49 @@ static void restore_cursor_bg(int x, int y) {
             graphics_put_pixel(x + c, y + r, cursor_bg[r * 16 + c]);
 }
 
+static uint32_t lerp_color(uint32_t c1, uint32_t c2, int t, int max) {
+    uint8_t r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+    uint8_t r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+    uint8_t r = r1 + ((r2 - r1) * t / max);
+    uint8_t g = g1 + ((g2 - g1) * t / max);
+    uint8_t b = b1 + ((b2 - b1) * t / max);
+    return 0xFF000000 | (r << 16) | (g << 8) | b;
+}
+
+static void draw_background(void) {
+    uint32_t w = graphics_get_width();
+    uint32_t h = graphics_get_height();
+    graphics_fill_gradient_v(0, 0, w, h, C_BG_TOP, C_BG_BOT);
+    int cx = (int)w / 2;
+    for (int r = 220; r > 0; r -= 4) {
+        graphics_fill_circle(cx, (int)h * 3 / 4, r,
+            lerp_color(0xFF3A5A86, C_BG_BOT, r, 220));
+    }
+}
+
 static void draw_logo(void) {
     uint32_t w = graphics_get_width();
     uint32_t cx = (int)w / 2;
-    int logo_y = 80;
-    graphics_fill_circle(cx, logo_y, 36, 0xFF6C63FF);
-    graphics_fill_circle(cx, logo_y, 28, 0xFF1A1A3E);
-    graphics_draw_string(cx - 24, logo_y - 46, "Nyx", 0xFF6C63FF);
-    graphics_draw_string(cx - 28, logo_y + 52, "Nyx OS", 0xFFB0B0FF);
+    int logo_y = 90;
+    for (int r = 46; r > 36; r -= 2)
+        graphics_fill_circle(cx, logo_y, r, lerp_color(0xFF4C7BD9, C_PANEL, r, 46));
+    graphics_fill_circle(cx, logo_y, 34, C_ACTIVE);
+    graphics_fill_circle(cx, logo_y, 26, 0xFF1B1E22);
+    graphics_draw_string(cx - 24, logo_y - 44, "Solis", C_ACTIVE);
+    graphics_draw_string(cx - 28, logo_y + 48, "Solis OS", 0xFFAFC4EE);
 }
 
-static void draw_panel(void) {
+static void draw_panel(bool hovered) {
     uint32_t w = graphics_get_width();
     uint32_t h = graphics_get_height();
     int px = ((int)w - PANEL_W) / 2;
     int py = ((int)h - PANEL_H) / 2 + 40;
 
-    graphics_fill_rounded_rect(px - 2, py - 2, PANEL_W + 4, PANEL_H + 4, PANEL_R + 2, 0x22000000);
-    graphics_fill_rounded_rect(px, py, PANEL_W, PANEL_H, PANEL_R, 0xDD1A1A2E);
-    graphics_draw_rounded_rect(px, py, PANEL_W, PANEL_H, PANEL_R, 0xFF6A5ACD);
+    graphics_fill_rect(px - 2, py - 3, PANEL_W + 4, PANEL_H + 4, 0xFF101012);
+    graphics_fill_rect(px, py, PANEL_W, PANEL_H, C_PANEL);
+    graphics_draw_rect(px, py, PANEL_W, PANEL_H, C_PANEL_LN);
 
-    graphics_draw_string(px + 100, py + 40, "Welcome, User!", 0xFFE0E0FF);
+    graphics_draw_string(px + 100, py + 40, "Welcome, User!", C_TEXT);
 
     int bx = px + (PANEL_W - BTN_W) / 2;
     int by = py + 200;
@@ -58,40 +87,22 @@ static void draw_panel(void) {
     btn_rect[2] = BTN_W;
     btn_rect[3] = BTN_H;
 
-    graphics_fill_rounded_rect(bx, by, BTN_W, BTN_H, BTN_R, 0xFF6C63FF);
-    graphics_draw_rounded_rect(bx, by, BTN_W, BTN_H, BTN_R, 0xFF8B83FF);
+    uint32_t bc = hovered ? C_ACTIVE_DK : C_ACTIVE;
+    graphics_fill_rect(bx, by, BTN_W, BTN_H, bc);
+    graphics_draw_rect(bx, by, BTN_W, BTN_H, C_ACTIVE_DK);
     graphics_draw_string(bx + 56, by + 14, "  Sign In  ", 0xFFFFFFFF);
-}
-
-static void draw_mouse(void) {
-    for (uint32_t row = 0; row < 16; ++row) {
-        for (uint32_t col = 0; col < 16; ++col) {
-            graphics_put_pixel(mouse_x + col, mouse_y + row, 0xFFFFFFFF);
-        }
-    }
 }
 
 void login_screen(void) {
     uint32_t w = graphics_get_width();
     uint32_t h = graphics_get_height();
-    graphics_fill_gradient_v(0, 0, w, h, 0xFF0D0D2B, 0xFF1A0A3E);
 
-    uint32_t seed = 42;
-    for (int i = 0; i < 150; i++) {
-        seed = seed * 1103515245 + 12345;
-        uint32_t sx = (seed >> 16) % w;
-        seed = seed * 1103515245 + 12345;
-        uint32_t sy = (seed >> 16) % h;
-        seed = seed * 1103515245 + 12345;
-        uint32_t b = ((seed >> 16) & 0x7F) + 0x80;
-        graphics_put_pixel(sx, sy, 0xFF000000 | (b << 16) | (b << 8) | b);
-    }
-
+    draw_background();
     draw_logo();
-    draw_panel();
+    draw_panel(false);
 
     save_cursor_bg(mouse_x, mouse_y);
-    draw_mouse();
+    graphics_draw_mouse_cursor(mouse_x, mouse_y, 0xFFFFFFFF);
     prev_mx = mouse_x;
     prev_my = mouse_y;
 
@@ -115,13 +126,10 @@ void login_screen(void) {
             bool over = (mouse_x >= bx && mouse_x < bx + BTN_W && mouse_y >= by && mouse_y < by + BTN_H);
             if (over != hovered) {
                 hovered = over;
-                draw_panel();
-                save_cursor_bg(mouse_x, mouse_y);
-            } else {
-                save_cursor_bg(mouse_x, mouse_y);
+                draw_panel(hovered);
             }
-
-            draw_mouse();
+            save_cursor_bg(mouse_x, mouse_y);
+            graphics_draw_mouse_cursor(mouse_x, mouse_y, 0xFFFFFFFF);
             prev_mx = mouse_x;
             prev_my = mouse_y;
         }

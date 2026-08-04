@@ -1,2 +1,2 @@
-#ifndef NYX_GUI_H_
-#define NYX_GUI_H_
+#ifndef SOLIS_GUI_H_
+#define SOLIS_GUI_H_
