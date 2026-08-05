@@ -3,7 +3,7 @@
 #include <solis/idt.h>
 #include <solis/pic.h>
 #include <solis/keyboard.h>
-#include <solis/mouse.h>
+#include <solis/pointer.h>
 #include <solis/graphics.h>
 #include <solis/window_manager.h>
 #include <solis/desktop.h>
@@ -16,8 +16,6 @@
 #include <solis/spx.h>
 #include <solis/net.h>
 #include <solis/dbg.h>
-#include <solis/i2c.h>
-#include <solis/touchpad.h>
 #include <solis/rtc.h>
 
 extern char _binary_build_spx_terminal_spx_start[];
@@ -107,9 +105,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     spx_init(spx_apps, 9);
 
     keyboard_init();
-    mouse_init();
-    i2c_init();
-    touchpad_init();
+    pointer_init();
 
     net_init();
 
@@ -131,15 +127,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
             uint32_t last_clock_ticks = 0;
 
             for (;;) {
-                struct mouse_state ms;
-                mouse_get_state(&ms);
-                if (ms.dx || ms.dy || ms.buttons) {
-                    gui_handle_mouse(ms.dx, ms.dy, ms.buttons);
-                }
-
-                struct touchpad_state ts;
-                if (touchpad_poll(&ts) && (ts.dx || ts.dy || ts.buttons)) {
-                    gui_handle_mouse(ts.dx, ts.dy, ts.buttons);
+                struct pointer_state ps;
+                if (pointer_poll(&ps)) {
+                    gui_handle_mouse(ps.dx, ps.dy, ps.buttons);
                 }
                 if (keyboard_has_input()) {
                     char key = 0;

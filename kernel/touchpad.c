@@ -11,7 +11,7 @@
 
 #define HID_REG_DESC        0x01
 #define HID_REG_REPORT      0x02
-#define HID_REG_COMMAND     0x03
+#define HID_REG_COMMAND     0x04
 #define HID_REG_RESET       0x04
 
 #define HID_CMD_RESET       0x01
@@ -19,6 +19,10 @@
 #define HID_CMD_SET_POWER   0x03
 #define HID_POWER_ON        0x00
 #define HID_POWER_SLEEP     0x01
+
+/* Command register writes pack the command in the high nibble and the
+ * parameter in the low nibble, e.g. SET_POWER + FULL ON == 0x30. */
+#define HID_CMD_WRITE(cmd, param) (((cmd) << 4) | (param))
 
 #define MAX_TOUCHPAD_ATTEMPT 3
 #define HID_DESC_SIZE 256
@@ -29,7 +33,9 @@ static bool touchpad_found = false;
 static bool touchpad_initialized = false;
 
 static int touchpad_reset(void) {
-    if (i2c_smbus_write_byte(touchpad_address, HID_REG_RESET, 0x01) != 0)
+    /* Reset is a command-register write of 0x01; the device clears the
+     * register back to zero once the reset has completed. */
+    if (i2c_smbus_write_byte(touchpad_address, HID_REG_RESET, HID_CMD_RESET) != 0)
         return -1;
     uint32_t timeout = 50000;
     while (timeout--) {
@@ -68,8 +74,11 @@ void touchpad_init(void) {
 
     for (int i = 0; addrs[i]; i++) {
         if (detect_touchpad_at(addrs[i])) {
-            if (touchpad_reset() == 0) {
-                i2c_smbus_write_byte(touchpad_address, HID_REG_COMMAND, HID_CMD_SET_POWER | (HID_POWER_ON << 4));
+            /* Per the HID-over-I2C spec, bring the device to FULL ON power
+             * before issuing the reset. */
+            if (i2c_smbus_write_byte(touchpad_address, HID_REG_COMMAND,
+                                     HID_CMD_WRITE(HID_CMD_SET_POWER, HID_POWER_ON)) == 0 &&
+                touchpad_reset() == 0) {
                 touchpad_found = true;
                 touchpad_initialized = true;
                 return;
@@ -153,6 +162,13 @@ bool touchpad_poll(struct touchpad_state *state) {
         if (has_prev) {
             state->dx = x - prev_x;
             state->dy = y - prev_y;
+            /* Clamp so a bogus report can't fling the pointer across the
+             * screen; also flips Y so up is up. */
+            if (state->dx > 127) state->dx = 127;
+            if (state->dx < -127) state->dx = -127;
+            if (state->dy > 127) state->dy = 127;
+            if (state->dy < -127) state->dy = -127;
+            state->dy = -state->dy;
         }
 
         prev_x = x;

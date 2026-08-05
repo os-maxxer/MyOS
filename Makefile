@@ -27,6 +27,7 @@ OBJS := \
 	$(BUILD_DIR)/kernel/pic.o \
 	$(BUILD_DIR)/kernel/keyboard.o \
 	$(BUILD_DIR)/kernel/mouse.o \
+	$(BUILD_DIR)/kernel/pointer.o \
 	$(BUILD_DIR)/kernel/i2c.o \
 	$(BUILD_DIR)/kernel/touchpad.o \
 	$(BUILD_DIR)/kernel/graphics.o \
@@ -95,6 +96,9 @@ $(BUILD_DIR)/kernel/keyboard.o: $(KERNEL_DIR)/keyboard.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/mouse.o: $(KERNEL_DIR)/mouse.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/pointer.o: $(KERNEL_DIR)/pointer.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/i2c.o: $(KERNEL_DIR)/i2c.c | $(BUILD_DIR)
