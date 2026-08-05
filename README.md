@@ -5,6 +5,17 @@ Solis is a 32-bit hobby operating system for x86 (i386). It boots with GRUB
 set of built-in applications. It is written in freestanding C with no libc, and
 is primarily developed and run inside QEMU.
 
+## Stability status
+
+Solis is **partially stable**. It boots reliably and the desktop, apps, and
+filesystem work in everyday use, but it is a hobby OS that has **not been
+tested to its full extent**:
+
+- There is **no installer yet** — Solis currently runs from the ISO/disk
+  images built by `make` inside an emulator (QEMU) or VM.
+- It has not been validated on a wide range of real hardware.
+- Expect occasional bugs and rough edges.
+
 ## Features
 
 - **Boot**: GRUB 2 / Multiboot2, 1024x768x32 VBE framebuffer
@@ -45,7 +56,25 @@ can be launched from the desktop icons, the bottom dock, or the Apps grid
 - The **top bar** shows the launcher, open window names, and a live clock.
 - The **Settings** app changes the theme and background in real time.
 
-## Requirements
+## Minimum system requirements
+
+Solis is a lightweight 32-bit OS, but it still expects a specific hardware
+environment. These are the minimums to run it (the defaults used by the
+`make run` QEMU setup):
+
+- **CPU**: 32-bit x86 (i386 or newer); one core is enough
+- **RAM**: 256 MB
+- **Graphics**: VBE-capable display adapter able to provide a
+  1024x768x32 framebuffer mode
+- **Storage**: an ATA (IDE) disk for the SOLFS file system
+- **Input**: a PS/2 keyboard and PS/2 mouse (I2C touchpad is optional)
+- **Network** *(optional)*: an RTL8139 Ethernet card for networking
+- **Boot**: GRUB 2 with Multiboot2 support
+
+The recommended way to run Solis today is inside QEMU (see
+[Running](#running)) — no installer is required there.
+
+## Requirements (for building)
 
 The build targets i386 (`-m32`) and needs the usual OS-dev toolchain. On
 Fedora, install the following (VirtualBox is optional, only for `make vbox-disk`):
