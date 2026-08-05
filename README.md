@@ -175,4 +175,4 @@ include/solis/    public headers shared by the kernel and applications
 
 ## License
 
-[MIT](LICENSE)
+[Apache 2.0](LICENSE)
