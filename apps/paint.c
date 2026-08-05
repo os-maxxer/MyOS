@@ -17,7 +17,8 @@ void paint_init(void) {
 }
 
 /* Save the canvas as a simple binary image:
- * 8-byte header "SPB1" + w(le16) + h(le16), then BGR pixels row-major. */
+ * 8-byte header "SPB1" + w(le16) + h(le16), then BGR pixels row-major.
+ * SOLFS replaces the whole file on each write, so build it in one buffer. */
 static void paint_save(void) {
     char path[64];
     if (!gui_save_dialog("Image", path, 64)) return;
@@ -25,24 +26,22 @@ static void paint_save(void) {
     int fd = vfs_create(path);
     if (fd < 0) { fd = vfs_open(path); if (fd < 0) return; }
 
-    uint8_t hdr[8];
-    hdr[0] = 'S'; hdr[1] = 'P'; hdr[2] = 'B'; hdr[3] = 1;
-    hdr[4] = (uint8_t)(CANVAS_W & 0xFF);
-    hdr[5] = (uint8_t)((CANVAS_W >> 8) & 0xFF);
-    hdr[6] = (uint8_t)(CANVAS_H & 0xFF);
-    hdr[7] = (uint8_t)((CANVAS_H >> 8) & 0xFF);
-    vfs_write(fd, hdr, 8);
-
+    static uint8_t img[CANVAS_W * CANVAS_H * 3 + 8];
+    img[0] = 'S'; img[1] = 'P'; img[2] = 'B'; img[3] = 1;
+    img[4] = (uint8_t)(CANVAS_W & 0xFF);
+    img[5] = (uint8_t)((CANVAS_W >> 8) & 0xFF);
+    img[6] = (uint8_t)(CANVAS_H & 0xFF);
+    img[7] = (uint8_t)((CANVAS_H >> 8) & 0xFF);
+    uint32_t o = 8;
     for (int y = 0; y < CANVAS_H; y++) {
-        uint8_t row[CANVAS_W * 3];
         for (int x = 0; x < CANVAS_W; x++) {
             uint32_t c = canvas[y][x];
-            row[x * 3 + 0] = (uint8_t)(c & 0xFF);
-            row[x * 3 + 1] = (uint8_t)((c >> 8) & 0xFF);
-            row[x * 3 + 2] = (uint8_t)((c >> 16) & 0xFF);
+            img[o++] = (uint8_t)(c & 0xFF);
+            img[o++] = (uint8_t)((c >> 8) & 0xFF);
+            img[o++] = (uint8_t)((c >> 16) & 0xFF);
         }
-        vfs_write(fd, row, CANVAS_W * 3);
     }
+    vfs_write(fd, img, o);
 }
 
 void paint_draw(int x, int y, int w, int h) {
