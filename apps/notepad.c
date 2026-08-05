@@ -1,5 +1,7 @@
 #include <solis/apps/notepad.h>
 #include <solis/graphics.h>
+#include <solis/gui.h>
+#include <solis/vfs.h>
 #include <solis/solfs.h>
 
 #define NOTE_COLS 60
@@ -73,19 +75,28 @@ static void save_note(void) {
     while (ri > 0) fname[fi++] = rev[--ri];
     fname[fi] = '\0';
 
-    int fd = solfs_create(fname);
-    if (fd >= 0) {
-        int len = NOTE_BUF;
-        while (len > 0 && note_buffer[len - 1] == ' ') len--;
-        solfs_write(fd, (const uint8_t*)note_buffer, len);
+    char path[64];
+    if (!gui_save_dialog(fname, path, 64)) {
+        set_status("Save cancelled");
+        return;
     }
+
+    int fd = vfs_create(path);
+    if (fd < 0) {
+        fd = vfs_open(path);
+        if (fd < 0) { set_status("Cannot save"); return; }
+    }
+
+    int len = NOTE_BUF;
+    while (len > 0 && note_buffer[len - 1] == ' ') len--;
+    vfs_write(fd, (const uint8_t*)note_buffer, len);
 
     char msg[40];
     int si = 0;
     const char *pre2 = "Saved ";
     while (*pre2) msg[si++] = *pre2++;
     int ni = 0;
-    while (fname[ni]) msg[si++] = fname[ni++];
+    while (path[ni] && si < 39) msg[si++] = path[ni++];
     msg[si] = '\0';
     set_status(msg);
 }

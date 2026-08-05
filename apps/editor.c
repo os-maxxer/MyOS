@@ -1,5 +1,6 @@
 #include <solis/apps/editor.h>
 #include <solis/graphics.h>
+#include <solis/gui.h>
 #include <solis/vfs.h>
 #include <solis/timer.h>
 
@@ -131,12 +132,24 @@ static const char *lang_name(void) {
 }
 
 static void save_file(void) {
-    if (cur_file[0] == '\0') {
-        set_status("No filename - use SaveAs");
+    char path[64];
+    if (!gui_save_dialog(cur_file[0] ? cur_file : "untitled", path, 64)) {
+        set_status("Save cancelled");
         return;
     }
-    int fd = vfs_create(cur_file);
-    if (fd < 0) { fd = vfs_open(cur_file); if (fd < 0) { set_status("Cannot save"); return; } }
+
+    /* remember the basename for the file indicator */
+    int pi = 0;
+    while (path[pi]) pi++;
+    int bi = pi;
+    while (bi > 0 && path[bi - 1] != '/') bi--;
+    int ci = 0;
+    for (int i = bi; path[i] && ci < MAX_FNAME - 1; i++)
+        cur_file[ci++] = path[i];
+    cur_file[ci] = '\0';
+
+    int fd = vfs_create(path);
+    if (fd < 0) { fd = vfs_open(path); if (fd < 0) { set_status("Cannot save"); return; } }
     char out[EDIT_BUF];
     int oi = 0;
     for (int r = 0; r < EDIT_ROWS; r++) {

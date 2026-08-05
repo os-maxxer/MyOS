@@ -169,6 +169,7 @@ void spx_init_syscalls(void) {
     sys_table.rtc_get_timezone_count = rtc_get_timezone_count;
     sys_table.rtc_get_timezone_name  = rtc_get_timezone_name;
     sys_table.rtc_get_timezone_offset = rtc_get_timezone_offset;
+    sys_table.gui_save_dialog       = gui_save_dialog;
 
     struct syscall_table *target = (struct syscall_table *)SYSCALL_TABLE_ADDR;
     *target = sys_table;

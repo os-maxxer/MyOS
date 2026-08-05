@@ -70,6 +70,9 @@ struct syscall_table {
     int  (*rtc_get_timezone_count)(void);
     void (*rtc_get_timezone_name)(int index, char *buf, int max_len);
     int  (*rtc_get_timezone_offset)(int index);
+
+    /* Modal save dialog. Returns 1 on save with out_path filled, 0 on cancel. */
+    int  (*gui_save_dialog)(const char *suggested, char *out_path, int out_max);
 };
 
 #endif

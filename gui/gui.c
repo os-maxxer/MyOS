@@ -10,11 +10,14 @@
 #include <solis/graphics.h>
 #include <solis/console.h>
 #include <solis/mouse.h>
+#include <solis/pointer.h>
 #include <solis/keyboard.h>
 #include <solis/bmp.h>
 #include <solis/spx.h>
+#include <solis/vfs.h>
 #include <solis/rtc.h>
 #include <solis/ports.h>
+#include <solis/solfs.h>
 #include <stdbool.h>
 
 /* ------------------------------------------------------------------ */
@@ -83,6 +86,7 @@ static int zcount = 0;
 static int mouse_x = 400;
 static int mouse_y = 300;
 static uint8_t mouse_buttons = 0;
+static bool gui_mouse_prev_left = false;
 static int active_window = -1;
 static int drag_window = -1;
 static bool redraw_pending = true;
@@ -1058,6 +1062,233 @@ void gui_set_theme(int theme) { gui_theme = theme; bg_cache_invalidate(); redraw
 int gui_get_theme(void) { return gui_theme; }
 
 /* ------------------------------------------------------------------ */
+/* Save dialog (blocking modal)                                        */
+/* ------------------------------------------------------------------ */
+#define DIALOG_W      420
+#define DIALOG_H      230
+#define DIALOG_PLACES 5
+#define DIALOG_NAME_MAX 23
+
+static bool save_dialog_active = false;
+static int  save_result = 0;
+static char dialog_save_dir[64];
+static char dialog_save_name[DIALOG_NAME_MAX + 1];
+static int  dialog_name_len = 0;
+static int  dialog_hover_btn = 0;
+static int  dialog_hover_place = -1;
+
+static const struct { const char *label; const char *path; } dialog_places[DIALOG_PLACES] = {
+    {"C:/",        "/"},
+    {"Home",       "/home"},
+    {"Documents",  "/docs"},
+    {"Downloads",  "/downloads"},
+    {"Desktop",    "/desktop"},
+};
+
+static void gui_str_cpy(char *dst, const char *src, int max) {
+    int i;
+    for (i = 0; i < max - 1 && src[i]; i++)
+        dst[i] = src[i];
+    dst[i] = '\0';
+}
+
+static int gui_str_len(const char *s) {
+    int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+static bool gui_str_eq(const char *a, const char *b) {
+    while (*a && *b && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+static int dialog_place_at(int mx, int my) {
+    int x = ((int)graphics_get_width() - DIALOG_W) / 2;
+    int y = ((int)graphics_get_height() - DIALOG_H) / 2;
+    for (int i = 0; i < DIALOG_PLACES; i++) {
+        int iy = y + 56 + i * 24;
+        if (mx >= x + 12 && mx < x + 162 && my >= iy && my < iy + 24)
+            return i;
+    }
+    return -1;
+}
+
+static int dialog_btn_at(int mx, int my) {
+    int x = ((int)graphics_get_width() - DIALOG_W) / 2;
+    int y = ((int)graphics_get_height() - DIALOG_H) / 2;
+    int by = y + DIALOG_H - 32;
+    if (mx >= x + DIALOG_W - 142 && mx < x + DIALOG_W - 82 && my >= by && my < by + 22)
+        return 1;
+    if (mx >= x + DIALOG_W - 76 && mx < x + DIALOG_W - 12 && my >= by && my < by + 22)
+        return 2;
+    return 0;
+}
+
+static void gui_draw_save_dialog(void) {
+    int x = ((int)graphics_get_width() - DIALOG_W) / 2;
+    int y = ((int)graphics_get_height() - DIALOG_H) / 2;
+    int w = DIALOG_W, h = DIALOG_H;
+
+    gui_draw_window_shadow(x, y, w, h);
+    graphics_fill_rect(x, y, w, h, C_WIN_BG);
+    graphics_draw_rect(x, y, w, h, C_ACTIVE_DK);
+    graphics_fill_rect(x, y, w, TITLEBAR_H, C_ACTIVE);
+    graphics_draw_string(x + 8, y + (TITLEBAR_H - 16) / 2, "Save", 0xFFFFFFFF);
+
+    graphics_draw_string(x + 12, y + 32, "Save in:", C_TEXT_DIM);
+    graphics_draw_string(x + 74, y + 32, dialog_save_dir, C_TEXT);
+
+    for (int i = 0; i < DIALOG_PLACES; i++) {
+        int iy = y + 56 + i * 24;
+        bool sel = gui_str_eq(dialog_save_dir, dialog_places[i].path);
+        bool hov = i == dialog_hover_place;
+        uint32_t bg = sel ? C_ACTIVE : (hov ? C_BTN_HOVER : C_BTN);
+        uint32_t fg = sel ? 0xFFFFFFFF : C_TEXT;
+        graphics_fill_rect(x + 12, iy, 150, 22, bg);
+        graphics_draw_rect(x + 12, iy, 150, 22, C_PANEL_LINE);
+        graphics_draw_string(x + 20, iy + 4, dialog_places[i].label, fg);
+    }
+
+    graphics_draw_string(x + 12, y + 154, "Name:", C_TEXT_DIM);
+    graphics_fill_rect(x + 60, y + 150, w - 72, 22, 0xFF101216);
+    graphics_draw_rect(x + 60, y + 150, w - 72, 22, C_ACTIVE_DK);
+    graphics_draw_string(x + 66, y + 154, dialog_save_name, C_TEXT);
+    graphics_fill_rect(x + 66 + dialog_name_len * 8, y + 155, 1, 14, C_TEXT);
+
+    int by = y + h - 32;
+    uint32_t sbg = dialog_hover_btn == 1 ? C_BTN_HOVER : 0xFF3B8B3B;
+    graphics_fill_rect(x + w - 142, by, 60, 22, sbg);
+    graphics_draw_rect(x + w - 142, by, 60, 22, C_PANEL_LINE);
+    graphics_draw_string(x + w - 142 + 17, by + 4, "Save", 0xFFFFFFFF);
+
+    uint32_t cbg = dialog_hover_btn == 2 ? C_BTN_HOVER : C_BTN;
+    graphics_fill_rect(x + w - 76, by, 64, 22, cbg);
+    graphics_draw_rect(x + w - 76, by, 64, 22, C_PANEL_LINE);
+    graphics_draw_string(x + w - 76 + 18, by + 4, "Cancel", 0xFFFFFFFF);
+}
+
+int gui_save_dialog(const char *suggested, char *out_path, int out_max) {
+    dialog_name_len = 0;
+    if (suggested) {
+        for (int i = 0; suggested[i] && dialog_name_len < DIALOG_NAME_MAX; i++) {
+            if (suggested[i] == '/') continue;
+            dialog_save_name[dialog_name_len++] = suggested[i];
+        }
+    }
+    dialog_save_name[dialog_name_len] = '\0';
+
+    const char *cwd = vfs_get_cwd();
+    gui_str_cpy(dialog_save_dir, (cwd && cwd[0]) ? cwd : "/home",
+                (int)sizeof(dialog_save_dir));
+
+    save_dialog_active = true;
+    save_result = 0;
+    dialog_hover_btn = 0;
+    dialog_hover_place = -1;
+
+    struct pointer_state ps;
+    bool dlg_prev_left = false;
+    if (pointer_poll(&ps))
+        dlg_prev_left = (ps.buttons & 0x01) != 0;
+
+    redraw_pending = true;
+    gui_redraw();
+
+    while (save_result == 0) {
+        if (pointer_poll(&ps)) {
+            bool changed = false;
+
+            if (ps.dx || ps.dy) {
+                if (prev_cursor_x >= 0) cursor_restore_bg(prev_cursor_x, prev_cursor_y);
+                mouse_x += ps.dx;
+                mouse_y += ps.dy;
+                if (mouse_x < 0) mouse_x = 0;
+                if (mouse_y < 0) mouse_y = 0;
+                if (mouse_x >= (int)graphics_get_width()) mouse_x = (int)graphics_get_width() - 1;
+                if (mouse_y >= (int)graphics_get_height()) mouse_y = (int)graphics_get_height() - 1;
+                changed = true;
+            }
+
+            bool left = (ps.buttons & 0x01) != 0;
+            if (left && !dlg_prev_left) {
+                int place = dialog_place_at(mouse_x, mouse_y);
+                int btn = dialog_btn_at(mouse_x, mouse_y);
+                if (place >= 0) {
+                    gui_str_cpy(dialog_save_dir, dialog_places[place].path,
+                                (int)sizeof(dialog_save_dir));
+                } else if (btn == 1 && dialog_name_len > 0) {
+                    save_result = 1;
+                } else if (btn == 2) {
+                    save_result = -1;
+                }
+                changed = true;
+            }
+            dlg_prev_left = left;
+
+            int hb = dialog_btn_at(mouse_x, mouse_y);
+            int hp = dialog_place_at(mouse_x, mouse_y);
+            if (hb != dialog_hover_btn || hp != dialog_hover_place) {
+                dialog_hover_btn = hb;
+                dialog_hover_place = hp;
+                changed = true;
+            }
+
+            if (changed) redraw_pending = true;
+        }
+
+        if (keyboard_has_input()) {
+            char k = 0;
+            if (keyboard_read_char(&k)) {
+                if (k == '\n' || k == '\r') {
+                    if (dialog_name_len > 0) save_result = 1;
+                } else if (k == 0x1b) {
+                    save_result = -1;
+                } else if (k == '\b') {
+                    if (dialog_name_len > 0) dialog_save_name[--dialog_name_len] = '\0';
+                    redraw_pending = true;
+                } else if (k >= 32 && dialog_name_len < DIALOG_NAME_MAX && k != '/') {
+                    dialog_save_name[dialog_name_len++] = k;
+                    dialog_save_name[dialog_name_len] = '\0';
+                    redraw_pending = true;
+                }
+            }
+        }
+
+        if (redraw_pending) {
+            redraw_pending = false;
+            gui_redraw();
+        }
+        __asm__ volatile("hlt");
+    }
+
+    int r = (save_result == 1) ? 1 : 0;
+
+    if (r == 1) {
+        int di = 0;
+        int dl = gui_str_len(dialog_save_dir);
+        for (int i = 0; i < dl && di < out_max - 1; i++)
+            out_path[di++] = dialog_save_dir[i];
+        if (dl > 1 && di < out_max - 1)
+            out_path[di++] = '/';
+        for (int i = 0; dialog_save_name[i] && di < out_max - 1; i++)
+            out_path[di++] = dialog_save_name[i];
+        out_path[di] = '\0';
+    } else if (out_max > 0) {
+        out_path[0] = '\0';
+    }
+
+    save_dialog_active = false;
+    dialog_hover_btn = 0;
+    dialog_hover_place = -1;
+    gui_mouse_prev_left = dlg_prev_left;
+    redraw_pending = true;
+    gui_redraw();
+
+    return r;
+}
+
+/* ------------------------------------------------------------------ */
 /* Redraw                                                              */
 /* ------------------------------------------------------------------ */
 void gui_redraw(void) {
@@ -1077,6 +1308,7 @@ void gui_redraw(void) {
 
     gui_draw_panel();
     if (start_menu_open) gui_draw_start_menu();
+    if (save_dialog_active) gui_draw_save_dialog();
 
     cursor_save_bg(mouse_x, mouse_y);
     graphics_draw_mouse_cursor(mouse_x, mouse_y, 0xFFFFFFFF);
@@ -1102,10 +1334,9 @@ static bool pt_in_rect(int px, int py, const struct gui_rect *r) {
 
 void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     bool left_down = buttons & 0x01;
-    static bool prev_left = false;
-    bool left_click = left_down && !prev_left;
-    bool left_release = !left_down && prev_left;
-    prev_left = left_down;
+    bool left_click = left_down && !gui_mouse_prev_left;
+    bool left_release = !left_down && gui_mouse_prev_left;
+    gui_mouse_prev_left = left_down;
 
     int sw = graphics_get_width();
     int sh = graphics_get_height();

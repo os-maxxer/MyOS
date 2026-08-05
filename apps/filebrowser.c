@@ -154,11 +154,11 @@ void filebrowser_draw(int x, int y, int w, int h) {
     graphics_draw_string(x + 8, y + 6, "Places", 0xFFAAAAAA);
 
     struct { const char *label; const char *path; } places[] = {
-        {"Home",     "/home"},
-        {"Documents","/docs"},
-        {"Downloads","/downloads"},
-        {"Desktop",  "/desktop"},
-        {"Root",     "/"},
+        {"C:/",        "/"},
+        {"Home",       "/home"},
+        {"Documents",  "/docs"},
+        {"Downloads",  "/downloads"},
+        {"Desktop",    "/desktop"},
     };
     int nplaces = 5;
     for (int i = 0; i < nplaces; i++) {
@@ -257,13 +257,11 @@ void filebrowser_draw(int x, int y, int w, int h) {
     graphics_fill_rect(x, sb_y, w, 20, 0xFF2D2D2D);
     char status[48];
     int si = 0;
-    if (str_eq(current_path, "/")) {
-        const char *cp = "Root";
-        while (*cp) status[si++] = *cp++;
-    } else {
-        const char *cp = current_path + 1;
-        while (*cp) status[si++] = *cp++;
-    }
+    const char *drive = "c:";
+    while (*drive) status[si++] = *drive++;
+    const char *rest = current_path;
+    if (!rest[0]) rest = "/";
+    while (*rest && si < 40) status[si++] = *rest++;
     status[si++] = ' ';
     status[si++] = '-';
     status[si++] = ' ';
@@ -301,11 +299,11 @@ void filebrowser_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse
     if (rel_x >= 0 && rel_x < SIDEBAR_W && rel_y >= 28) {
         int idx = (rel_y - 28) / 28;
         struct { const char *label; const char *path; } places[] = {
-            {"Home",     "/home"},
-            {"Documents","/docs"},
-            {"Downloads","/downloads"},
-            {"Desktop",  "/desktop"},
-            {"Root",     "/"},
+            {"C:/",        "/"},
+            {"Home",       "/home"},
+            {"Documents",  "/docs"},
+            {"Downloads",  "/downloads"},
+            {"Desktop",    "/desktop"},
         };
         if (idx >= 0 && idx < 5) {
             navigate_to(places[idx].path);

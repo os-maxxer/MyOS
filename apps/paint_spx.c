@@ -6,5 +6,5 @@ const struct app_exports __attribute__((section(".spx_exports"), used)) spx_app 
     .init = paint_init,
     .draw = paint_draw,
     .handle_key = paint_handle_key,
-    .handle_mouse = 0,
+    .handle_mouse = paint_handle_mouse,
 };

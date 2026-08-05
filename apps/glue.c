@@ -180,6 +180,10 @@ int rtc_get_timezone_offset(int index) {
     return SYS->rtc_get_timezone_offset(index);
 }
 
+int gui_save_dialog(const char *suggested, char *out_path, int out_max) {
+    return SYS->gui_save_dialog(suggested, out_path, out_max);
+}
+
 void _start(void) {
     for (;;);
 }
