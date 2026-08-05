@@ -1282,8 +1282,10 @@ int gui_save_dialog(const char *suggested, char *out_path, int out_max) {
     dialog_hover_btn = 0;
     dialog_hover_place = -1;
     gui_mouse_prev_left = dlg_prev_left;
+
+    /* Defer the redraw to the main loop so it runs after the caller writes
+     * the file; otherwise an open Files window shows a stale listing. */
     redraw_pending = true;
-    gui_redraw();
 
     return r;
 }
