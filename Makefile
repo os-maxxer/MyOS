@@ -383,7 +383,7 @@ $(BUILD_DIR)/solis.iso: $(BUILD_DIR)/solis.kernel boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(BUILD_DIR)/isofiles >/dev/null 2>&1
 
 # Disk with pre-loaded packages
-$(BUILD_DIR)/disk.img: pkg-spx
+$(BUILD_DIR)/disk.img: pkg-spx tools/mksolfs.py
 	python3 tools/mksolfs.py pkg/ $@
 
 $(BUILD_DIR)/disk.vdi: $(BUILD_DIR)/disk.img
@@ -393,12 +393,25 @@ $(BUILD_DIR)/disk.vdi: $(BUILD_DIR)/disk.img
 vbox-disk: $(BUILD_DIR)/disk.vdi
 
 QEMU_VGA ?= -vga std
+QEMU_DISPLAY ?= gtk,grab-on-hover=on
 
 run: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
-	qemu-system-i386 $(QEMU_VGA) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nic user,model=rtl8139
+	qemu-system-i386 $(QEMU_VGA) -display $(QEMU_DISPLAY) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nic user,model=rtl8139
+
+run-x11: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
+	GDK_BACKEND=x11 qemu-system-i386 $(QEMU_VGA) -display $(QEMU_DISPLAY) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nic user,model=rtl8139
 
 run-serial: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
-	qemu-system-i386 $(QEMU_VGA) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -serial file:serial.log -nic user,model=rtl8139
+	qemu-system-i386 $(QEMU_VGA) -display $(QEMU_DISPLAY) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -serial file:serial.log -nic user,model=rtl8139
+
+run-x11-serial: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
+	GDK_BACKEND=x11 qemu-system-i386 $(QEMU_VGA) -display $(QEMU_DISPLAY) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -serial file:serial.log -nic user,model=rtl8139
+
+run-sdl: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
+	qemu-system-i386 $(QEMU_VGA) -display sdl -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nic user,model=rtl8139
+
+run-sdl-serial: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
+	qemu-system-i386 $(QEMU_VGA) -display sdl -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -serial file:serial.log -nic user,model=rtl8139
 
 run-nographic: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 	qemu-system-i386 -vga std -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nographic -nic user,model=rtl8139
@@ -409,4 +422,4 @@ run-dbg: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all run clean vbox-disk
+.PHONY: all run run-x11 run-sdl run-serial run-x11-serial run-sdl-serial run-nographic run-dbg clean vbox-disk

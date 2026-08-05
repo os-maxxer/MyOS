@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Create a SOLFS disk image with pre-loaded package files."""
+"""Create a SOLFS disk image with pre-loaded package files.
+
+Incremental: if the output image already exists and is a valid SOLFS disk,
+entries that are not package files (user files and directories created by the
+OS) are preserved. Package files (repo.json and *.spx) are always refreshed
+from the package directory.
+"""
 import struct
 import sys
 import os
@@ -15,21 +21,84 @@ SOLFS_DIR_ENTRIES = 32
 SOLFS_DIR_SECTORS = 2
 SOLFS_DATA_START = 35
 
-def create_disk(pkg_dir, output_path):
-    # Read all files from pkg directory (recursive, flatten names)
-    files = []
+SOLFS_FAT_FREE = 0x0000
+SOLFS_FAT_EOF = 0xFFFF
+SOLFS_ATTR_DIR = 0x01
+SOLFS_MAX_FILE_SIZE = (DISK_SECTORS - SOLFS_DATA_START) * SECTOR_SIZE
+
+
+def load_existing_disk(path):
+    """Return {name: (data, attrs)} for a valid existing SOLFS image, or {}."""
+    if not os.path.isfile(path):
+        return {}
+    with open(path, 'rb') as f:
+        disk = f.read()
+    if len(disk) < DISK_SECTORS * SECTOR_SIZE:
+        return {}
+
+    magic = struct.unpack_from('<I', disk, 0)[0]
+    if magic != SOLFS_MAGIC:
+        return {}
+
+    fat = [struct.unpack_from('<H', disk, (1 + i) * SECTOR_SIZE + j * 2)[0]
+           for i in range(SOLFS_FAT_SECTORS)
+           for j in range(SECTOR_SIZE // 2)]
+
+    existing = {}
+    for i in range(SOLFS_DIR_ENTRIES):
+        off = (SOLFS_DATA_START - SOLFS_DIR_SECTORS) * SECTOR_SIZE + i * 32
+        e = disk[off:off + 32]
+        name = e[0:24].split(b'\x00')[0].decode('latin1')
+        if not name:
+            continue
+        attrs = e[24]
+        cluster = struct.unpack_from('<H', e, 25)[0]
+        size = struct.unpack_from('<I', e, 27)[0]
+
+        if attrs & SOLFS_ATTR_DIR:
+            existing[name] = (b'', attrs)
+            continue
+
+        data = bytearray()
+        cl = cluster
+        while cl >= 2 and cl < SOLFS_FAT_EOF:
+            lba = SOLFS_DATA_START + (cl - 2)
+            data += disk[lba * SECTOR_SIZE:(lba + 1) * SECTOR_SIZE]
+            cl = fat[cl]
+            if len(data) > SOLFS_MAX_FILE_SIZE:
+                break
+        existing[name] = (bytes(data[:size]), attrs)
+
+    return existing
+
+
+def collect_packages(pkg_dir):
+    """Return {name: data} of package files in pkg_dir (recursive, flattened)."""
+    packages = {}
     for root, dirs, fnames in os.walk(pkg_dir):
         for fname in sorted(fnames):
             fpath = os.path.join(root, fname)
-            if os.path.isfile(fpath):
-                # Use basename only (flatten)
-                if fname.endswith('.spx') or fname == 'repo.json':
-                    with open(fpath, 'rb') as f:
-                        data = f.read()
-                    files.append((fname, data))
+            if not os.path.isfile(fpath):
+                continue
+            if fname.endswith('.spx') or fname == 'repo.json':
+                with open(fpath, 'rb') as f:
+                    packages[fname] = f.read()
+    return packages
 
-    # Calculate needed clusters
-    total_clusters_needed = sum((len(data) + SECTOR_SIZE - 1) // SECTOR_SIZE for _, data in files)
+
+def create_disk(pkg_dir, output_path):
+    # Packages always take precedence over any same-named existing entry.
+    files = [(name, data, 0) for name, data in collect_packages(pkg_dir).items()]
+
+    # Preserve user files and directories from an existing image.
+    for name, (data, attrs) in load_existing_disk(output_path).items():
+        if name not in [f[0] for f in files]:
+            files.append((name, data, attrs))
+
+    # Calculate needed clusters (directories use no clusters).
+    total_clusters_needed = sum(
+        (len(data) + SECTOR_SIZE - 1) // SECTOR_SIZE for _, data, attrs in files
+        if not (attrs & SOLFS_ATTR_DIR))
 
     if total_clusters_needed > SOLFS_FAT_ENTRIES - 2:
         print(f"Error: need {total_clusters_needed} clusters, max {SOLFS_FAT_ENTRIES - 2}")
@@ -64,7 +133,11 @@ def create_disk(pkg_dir, output_path):
     next_cluster = 2
     file_entries = []
 
-    for fname, data in files:
+    for fname, data, attrs in files:
+        if attrs & SOLFS_ATTR_DIR:
+            file_entries.append((fname, 0, 0, attrs))
+            continue
+
         first_cluster = next_cluster
         file_size = len(data)
         clusters_needed = (file_size + SECTOR_SIZE - 1) // SECTOR_SIZE
@@ -82,11 +155,11 @@ def create_disk(pkg_dir, output_path):
             if i < clusters_needed - 1:
                 struct.pack_into('<H', fat, cl * 2, cl + 1)
             else:
-                struct.pack_into('<H', fat, cl * 2, 0xFFFF)
+                struct.pack_into('<H', fat, cl * 2, SOLFS_FAT_EOF)
 
             next_cluster += 1
 
-        file_entries.append((fname, first_cluster, file_size))
+        file_entries.append((fname, first_cluster, file_size, attrs))
 
     # Write FAT to disk
     for i in range(SOLFS_FAT_SECTORS):
@@ -95,11 +168,11 @@ def create_disk(pkg_dir, output_path):
 
     # --- Root directory at LBA 33..34 ---
     dir_area = bytearray(SOLFS_DIR_SECTORS * SECTOR_SIZE)
-    for idx, (fname, first_cluster, file_size) in enumerate(file_entries):
+    for idx, (fname, first_cluster, file_size, attrs) in enumerate(file_entries):
         if idx >= SOLFS_DIR_ENTRIES:
             break
         entry = struct.pack('<24s', fname.encode()[:24])
-        entry += struct.pack('<B', 0)         # attrs
+        entry += struct.pack('<B', attrs)
         entry += struct.pack('<H', first_cluster)
         entry += struct.pack('<I', file_size)
         entry += b'\x00'                      # padding
@@ -115,8 +188,10 @@ def create_disk(pkg_dir, output_path):
         f.write(disk)
 
     print(f"Created {output_path} ({len(files)} files, {next_cluster - 2} clusters used)")
-    for fname, _, size in file_entries:
-        print(f"  {fname}: {size} bytes")
+    for fname, _, size, attrs in file_entries:
+        tag = "dir " if attrs & SOLFS_ATTR_DIR else ""
+        print(f"  {tag}{fname}: {size} bytes")
+
 
 if __name__ == '__main__':
     if len(sys.argv) != 3:
