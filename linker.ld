@@ -28,4 +28,9 @@ SECTIONS {
         *(COMMON)
         *(.bss*)
     }
+
+    /* The SPX slots occupy 16-36 MiB. Keep the GUI staging buffer beyond them. */
+    .frame_stage 0x02400000 (NOLOAD) : {
+        *(.frame_stage)
+    }
 }

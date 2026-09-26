@@ -1,6 +1,8 @@
 #include <solis/apps/filebrowser.h>
 #include <solis/graphics.h>
 #include <solis/vfs.h>
+#include <solis/gui.h>
+#include <solis/spx.h>
 #include <stdbool.h>
 
 #define SIDEBAR_W 150
@@ -16,6 +18,10 @@ static int  selected = -1;
 static int  scroll_offset = 0;
 static char preview_buf[1024];
 static int  preview_len = 0;
+static bool context_open = false;
+static bool context_submenu = false;
+static bool properties_open = false;
+static int context_x, context_y, context_entry = -1;
 
 static int str_len(const char *s) {
     int n = 0;
@@ -45,6 +51,9 @@ void filebrowser_init(void) {
     selected = -1;
     scroll_offset = 0;
     preview_len = 0;
+    context_open = false;
+    context_submenu = false;
+    properties_open = false;
 }
 
 static void refresh_list(void) {
@@ -143,6 +152,68 @@ static int entry_size(int idx) {
     if (fd < 0) return 0;
     int sz = vfs_get_size(fd);
     return sz;
+}
+
+static void entry_path(int idx, char *out, int max) {
+    str_cpy(out, current_path, max);
+    int n = str_len(out);
+    if (n > 0 && out[n - 1] != '/' && n < max - 1) out[n++] = '/';
+    out[n] = '\0';
+    str_cpy(out + n, entries[idx], max - n);
+    int len = str_len(out);
+    if (len > 0 && out[len - 1] == '/') out[len - 1] = '\0';
+}
+
+static int default_app_for_file(const char *name) {
+    int len = str_len(name);
+    if (len >= 2 && name[len - 2] == '.' &&
+        (name[len - 1] == 'c' || name[len - 1] == 'h')) return SPX_EDITOR;
+    if (len >= 4 && name[len - 4] == '.' && name[len - 3] == 'l' &&
+        name[len - 2] == 'u' && name[len - 1] == 'a') return SPX_EDITOR;
+    return SPX_NOTEPAD;
+}
+
+static void open_entry_in(int idx, int app_slot) {
+    if (idx < 0 || idx >= entry_count || is_dir(entries[idx])) return;
+    char path[PATH_MAX];
+    entry_path(idx, path, sizeof(path));
+    gui_open_with(app_slot, path);
+}
+
+static void draw_context_menu(int x, int y, int w, int h) {
+    if (properties_open && context_entry >= 0 && context_entry < entry_count) {
+        int px = x + (w - 250) / 2, py = y + (h - 110) / 2;
+        graphics_fill_rect(px + 3, py + 4, 250, 110, 0x88000000);
+        graphics_fill_rect(px, py, 250, 110, 0xFF171E4B);
+        graphics_draw_rect(px, py, 250, 110, 0xFF596DE8);
+        graphics_draw_string(px + 10, py + 8, "File properties", 0xFFFFFFFF);
+        graphics_draw_string(px + 10, py + 32, entries[context_entry], 0xFFEAF3FF);
+        char size[12]; int_to_str(entry_size(context_entry), size);
+        graphics_draw_string(px + 10, py + 56, "Size:", 0xFFAAA6B5);
+        graphics_draw_string(px + 58, py + 56, size, 0xFFEAF3FF);
+        graphics_draw_string(px + 10, py + 80, current_path, 0xFFAAA6B5);
+        return;
+    }
+    if (!context_open) return;
+    const int mw = 126, row_h = 22;
+    int mx = context_x, my = context_y;
+    if (mx + mw > w) mx = w - mw;
+    if (my + row_h * 3 > h) my = h - row_h * 3;
+    graphics_fill_rect(x + mx + 3, y + my + 4, mw, row_h * 3, 0x77000000);
+    graphics_fill_rect(x + mx, y + my, mw, row_h * 3, 0xFF171E4B);
+    graphics_draw_rect(x + mx, y + my, mw, row_h * 3, 0xFF596DE8);
+    graphics_draw_string(x + mx + 8, y + my + 3, "Open", 0xFFFFFFFF);
+    graphics_draw_string(x + mx + 8, y + my + row_h + 3, "Open with  >", 0xFFEAF3FF);
+    graphics_draw_string(x + mx + 8, y + my + row_h * 2 + 3, "Properties", 0xFFEAF3FF);
+    if (context_submenu) {
+        int sx = mx + mw, sy = my + row_h;
+        if (sx + 116 > w) sx = mx - 116;
+        if (sy + row_h * 2 > h) sy = h - row_h * 2;
+        graphics_fill_rect(x + sx, y + sy, 116, row_h * 2, 0xFF171E4B);
+        graphics_draw_rect(x + sx, y + sy, 116, row_h * 2, 0xFF596DE8);
+        graphics_draw_string(x + sx + 8, y + sy + 3, "Notes", 0xFFEAF3FF);
+        graphics_draw_string(x + sx + 8, y + sy + row_h + 3, "Editor", 0xFFEAF3FF);
+    }
 }
 
 void filebrowser_draw(int x, int y, int w, int h) {
@@ -269,6 +340,7 @@ void filebrowser_draw(int x, int y, int w, int h) {
     while (status[si]) si++;
     status[si] = '\0';
     graphics_draw_string(x + 6, sb_y + 3, status, 0xFFCCCCCC);
+    draw_context_menu(x, y, w, h);
 }
 
 void filebrowser_handle_key(char key) {
@@ -294,6 +366,46 @@ void filebrowser_handle_key(char key) {
 void filebrowser_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y) {
     int rel_x = mouse_x - x;
     int rel_y = mouse_y - y;
+
+    if (properties_open) {
+        properties_open = false;
+        context_open = false;
+        return;
+    }
+    if (context_open) {
+        const int mw = 126, row_h = 22;
+        int mx = context_x, my = context_y;
+        if (mx + mw > w) mx = w - mw;
+        if (my + row_h * 3 > h) my = h - row_h * 3;
+        if (context_submenu) {
+            int sx = mx + mw, sy = my + row_h;
+            if (sx + 116 > w) sx = mx - 116;
+            if (sy + row_h * 2 > h) sy = h - row_h * 2;
+            if (rel_x >= sx && rel_x < sx + 116 && rel_y >= sy && rel_y < sy + row_h * 2) {
+                int choice = (rel_y - sy) / row_h;
+                context_open = false;
+                context_submenu = false;
+                open_entry_in(context_entry, choice == 0 ? SPX_NOTEPAD : SPX_EDITOR);
+                return;
+            }
+        }
+        if (rel_x >= mx && rel_x < mx + mw && rel_y >= my && rel_y < my + row_h * 3) {
+            int action = (rel_y - my) / row_h;
+            if (action == 0 && context_entry >= 0 && context_entry < entry_count) {
+                if (is_dir(entries[context_entry])) nav_to_subdir(entries[context_entry]);
+                else open_entry_in(context_entry, default_app_for_file(entries[context_entry]));
+                context_open = false;
+            } else if (action == 1 && context_entry >= 0 && !is_dir(entries[context_entry])) {
+                context_submenu = !context_submenu;
+            } else if (action == 2) {
+                properties_open = true;
+                context_open = false;
+            }
+            return;
+        }
+        context_open = false;
+        context_submenu = false;
+    }
 
     // Sidebar clicks
     if (rel_x >= 0 && rel_x < SIDEBAR_W && rel_y >= 28) {
@@ -332,4 +444,30 @@ void filebrowser_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse
             }
         }
     }
+}
+
+void filebrowser_handle_context(int x, int y, int w, int h, int mouse_x, int mouse_y) {
+    int rel_x = mouse_x - x;
+    int rel_y = mouse_y - y;
+    int main_x = SIDEBAR_W;
+    int main_w = w - SIDEBAR_W;
+    int list_y = HEADER_H;
+    int list_h = h - HEADER_H - 22;
+    int visible = list_h / ITEM_H;
+    if (visible > MAX_VISIBLE) visible = MAX_VISIBLE;
+    if (rel_x < main_x || rel_x >= main_x + main_w || rel_y < list_y ||
+        rel_y >= list_y + visible * ITEM_H) {
+        context_open = false;
+        properties_open = false;
+        return;
+    }
+    int idx = scroll_offset + (rel_y - list_y) / ITEM_H;
+    if (idx < 0 || idx >= entry_count) return;
+    select_entry(idx);
+    context_entry = idx;
+    context_x = rel_x;
+    context_y = rel_y;
+    context_open = true;
+    context_submenu = false;
+    properties_open = false;
 }

@@ -4,16 +4,92 @@
 #include <solis/solfs.h>
 #include <solis/ata.h>
 #include <solis/rtc.h>
+#include <solis/spx.h>
 
 #define SIDEBAR_W 140
 #define TAB_H 36
 #define COLORS 7
 #define NUM_TABS 5
+#define HEADER_H 30
+#define SCROLL_STEP 32
 
 static int settings_tab = 0;
 static int sel_color = 0;
 static int hover_tab = -1;
 static int hover_tz = -1;
+
+/* The content of the active tab can be taller than the client area (the
+ * timezone list alone is 14 rows), so it scrolls. Offsets are per tab so
+ * switching back and forth keeps your place. */
+static int tab_scroll[NUM_TABS];
+
+/* All tab geometry in one place. The draw code and the hit testing used to
+ * compute these positions independently, which is how they drifted apart. */
+struct layout {
+    int cx, cy;         /* content area origin, before scrolling */
+    int cw, ch;         /* content area size */
+    int view_h;         /* visible height */
+    int content_h;      /* total height of the active tab's content */
+    int scroll;         /* clamped scroll offset */
+
+    int theme_y, theme_w, theme_h, theme_start, theme_cols, theme_rows;
+    int swatch_y, swatch_w, swatch_h, swatch_gap, swatch_start;
+    int tz_y;
+};
+
+static int theme_count(void) { return 7; }
+
+static void clamp_scroll(int content_h, int view_h) {
+    int maxs = content_h - view_h;
+    if (maxs < 0) maxs = 0;
+    int s = tab_scroll[settings_tab];
+    if (s < 0) s = 0;
+    if (s > maxs) s = maxs;
+    tab_scroll[settings_tab] = s;
+}
+
+static void compute_layout(struct layout *L, int x, int y, int w, int h) {
+    L->cx = x + SIDEBAR_W + 1;
+    L->cy = y + HEADER_H;
+    L->cw = w - SIDEBAR_W - 1;
+    L->view_h = h - HEADER_H;
+    if (L->view_h < 1) L->view_h = 1;
+
+    /* Four-column preview grid keeps each wallpaper large enough to compare. */
+    int nthemes = theme_count();
+    L->theme_cols = 4;
+    L->theme_rows = (nthemes + L->theme_cols - 1) / L->theme_cols;
+    int tw = (L->cw - 36) / L->theme_cols;
+    if (tw > 116) tw = 116;
+    L->theme_w = tw;
+    L->theme_h = tw * 3 / 4;
+    if (L->theme_h > 90) L->theme_h = 90;
+    L->theme_start = L->cx + (L->cw - (L->theme_cols * tw + (L->theme_cols - 1) * 8)) / 2;
+    L->theme_y = L->cy + 36;
+
+    L->swatch_w = 50;
+    L->swatch_h = 50;
+    L->swatch_gap = 10;
+    L->swatch_y = L->theme_y + L->theme_rows * L->theme_h +
+                  (L->theme_rows - 1) * 8 + 30;
+    L->swatch_start = L->cx + (L->cw - (4 * 50 + 3 * 10)) / 2;
+
+    L->tz_y = L->cy + 86;
+
+    switch (settings_tab) {
+        case 0: L->content_h = L->swatch_y - L->cy + 2 * (50 + 10 + 16) + 8; break;
+        case 1: L->content_h = 16 + 6 * 22 + 16; break;
+        case 2: L->content_h = 16 + 5 * 22 + 16; break;
+        case 3: L->content_h = 16 + 22 + 22 + 26 + rtc_get_timezone_count() * 20 + 8; break;
+        case 4: L->content_h = 30 + 24 + 20 + 20 + 28 + 1 + 12 + 3 * 16 + 8; break;
+        default: L->content_h = 0; break;
+    }
+
+    int maxs = L->content_h - L->view_h;
+    if (maxs < 0) maxs = 0;
+    clamp_scroll(L->content_h, L->view_h);
+    L->scroll = tab_scroll[settings_tab];
+}
 
 static const uint32_t color_presets[COLORS] = {
     0xFFADD8E6, 0xFF2C2F33, 0xFF1B3B4A,
@@ -107,9 +183,32 @@ static void draw_preview_solid(int x, int y, int w, int h) {
     graphics_draw_string(x + w/2 - 20, y + h - 14, "Solid", 0xFFDDDDDD);
 }
 
-static void draw_appearance_tab(int x, int y, int w, int h) {
-    (void)h;
-    int py = y + 12;
+static void draw_preview_bored(int x, int y, int w, int h) {
+    for (int row = 0; row < h; row++)
+        graphics_fill_rect(x, y + row, w, 1, lerp_c(0xFF707CAF, 0xFF5C699F, row, h));
+    for (int row = 0; row < h / 5; row++)
+        graphics_fill_rect(x, y + row, w * row / (h / 5), 1, 0xFF202D80);
+    for (int row = 0; row < h / 3; row++)
+        graphics_fill_rect(x + w - w * row / (h / 3), y + row, w * row / (h / 3), 1, 0xFF253381);
+    graphics_fill_rect(x + w / 2 - 16, y + h / 2 + 5, 32, 4, 0xFFFFFFFF);
+    graphics_draw_string(x + w / 2 - 12, y + h - 14, "Bored", 0xFFFFFFFF);
+}
+
+static void draw_preview_aurora(int x, int y, int w, int h) {
+    for (int row = 0; row < h; row++)
+        graphics_fill_rect(x, y + row, w, 1, lerp_c(0xFF122334, 0xFF20213E, row, h));
+    for (int r = h / 2; r > 2; r -= 2)
+        graphics_fill_circle(x + w * 3 / 5, y + h * 2 / 5, r,
+                             lerp_c(0xFF58D6B0, 0xFF16283B, r, h / 2));
+    graphics_fill_rect(x, y + h * 3 / 4, w / 3, h / 4, 0xFF176B69);
+    graphics_fill_rect(x + w / 3, y + h * 2 / 3, w / 3, h / 3, 0xFF245787);
+    graphics_fill_rect(x + w * 2 / 3, y + h * 3 / 4, w / 3, h / 4, 0xFF4A3B72);
+    graphics_draw_string(x + w / 2 - 20, y + h - 14, "Aurora", 0xFFFFFFFF);
+}
+
+static void draw_appearance_tab(const struct layout *L) {
+    int x = L->cx;
+    int py = L->cy + 12 - L->scroll;
     graphics_draw_string(x + 8, py, "Background Theme", 0xFFCCCCCC);
     py += 24;
 
@@ -119,34 +218,33 @@ static void draw_appearance_tab(int x, int y, int w, int h) {
         {GUI_THEME_SUNSET, draw_preview_sunset},
         {GUI_THEME_CHERRY_BLOSSOM, draw_preview_cherry},
         {GUI_THEME_STARFIELD, draw_preview_starfield},
+        {GUI_THEME_BORED, draw_preview_bored},
+        {GUI_THEME_AURORA, draw_preview_aurora},
     };
-    int nthemes = 5;
-    int tw = (w - 40) / nthemes;
-    if (tw > 130) tw = 130;
-    int th = tw * 3 / 4;
-    if (th > 90) th = 90;
-    int total_w = nthemes * tw + (nthemes - 1) * 10;
-    int start_x = x + (w - total_w) / 2;
+    int nthemes = theme_count();
+    int tw = L->theme_w, th = L->theme_h;
 
     int cur = gui_get_theme();
     for (int i = 0; i < nthemes; i++) {
-        int cx = start_x + i * (tw + 10);
-        themes[i].draw(cx, py, tw, th);
+        int col = i % L->theme_cols, grid_row = i / L->theme_cols;
+        int cx = L->theme_start + col * (tw + 8);
+        int cy = py + grid_row * (th + 8);
+        themes[i].draw(cx, cy, tw, th);
         if (cur == themes[i].id) {
-            graphics_draw_rect(cx-1, py-1, tw+2, th+2, 0xFFFFFFFF);
-            graphics_draw_rect(cx-2, py-2, tw+4, th+4, 0xFF4A90E2);
+            graphics_draw_rect(cx-1, cy-1, tw+2, th+2, 0xFFFFFFFF);
+            graphics_draw_rect(cx-2, cy-2, tw+4, th+4, 0xFF4A90E2);
         } else {
-            graphics_draw_rect(cx, py, tw, th, 0xFF666666);
+            graphics_draw_rect(cx, cy, tw, th, 0xFF666666);
         }
     }
 
-    py += th + 24;
+    py += L->theme_rows * th + (L->theme_rows - 1) * 8 + 24;
     graphics_draw_string(x + 8, py, "Solid Colors", 0xFFCCCCCC);
     py += 20;
 
     int cols = 4;
-    int sw = 50, sh = 50, gap = 10;
-    int col_start = x + (w - (cols * sw + (cols - 1) * gap)) / 2;
+    int sw = L->swatch_w, sh = L->swatch_h, gap = L->swatch_gap;
+    int col_start = L->swatch_start;
     for (int i = 0; i < COLORS; i++) {
         int cx = col_start + (i % cols) * (sw + gap);
         int cy = py + (i / cols) * (sh + gap + 16);
@@ -168,30 +266,35 @@ static void hex64_str(uint64_t val, char *buf) {
     buf[16] = '\0';
 }
 
-static void draw_system_tab(int x, int y, int w, int h) {
-    (void)w; (void)h;
-    int py = y + 16;
+static void draw_system_tab(const struct layout *L) {
+    int x = L->cx;
+    int py = L->cy + 16 - L->scroll;
     graphics_draw_string(x + 12, py, "CPU:", 0xFF888888);
-    graphics_draw_string(x + 80, py, "i386 (QEMU)", 0xFFCCCCCC);
+    char cpu[48];
+    sys_get_cpu_brand(cpu, sizeof(cpu));
+    graphics_draw_string(x + 80, py, cpu[0] ? cpu : "Unknown CPU", 0xFFCCCCCC);
     py += 22;
     graphics_draw_string(x + 12, py, "RAM:", 0xFF888888);
-    graphics_draw_string(x + 80, py, "256 MB", 0xFFCCCCCC);
+    char ram[20];
+    uint32_t mb = sys_get_total_ram();
+    char digits[12];
+    int dn = 0, rn = 0;
+    if (mb == 0) digits[dn++] = '0';
+    while (mb > 0) { digits[dn++] = '0' + (mb % 10); mb /= 10; }
+    while (dn > 0) ram[rn++] = digits[--dn];
+    ram[rn++] = ' '; ram[rn++] = 'M'; ram[rn++] = 'B'; ram[rn] = '\0';
+    graphics_draw_string(x + 80, py, ram, 0xFFCCCCCC);
     py += 22;
     graphics_draw_string(x + 12, py, "Architecture:", 0xFF888888);
     graphics_draw_string(x + 80, py, "x86 (32-bit)", 0xFFCCCCCC);
     py += 22;
-    graphics_draw_string(x + 12, py, "Filesystem:", 0xFF888888);
-    char fsstr[48] = "SOLFS";
-    if (ata_present()) {
-        int fi = 4;
-        fsstr[fi++] = ' ';
-        fsstr[fi++] = '(';
-        const char *sn = ata_get_serial();
-        while (*sn && fi < 46) fsstr[fi++] = *sn++;
-        fsstr[fi++] = ')';
-        fsstr[fi] = '\0';
-    }
-    graphics_draw_string(x + 80, py, fsstr, 0xFFCCCCCC);
+    graphics_draw_string(x + 12, py, "Storage:", 0xFF888888);
+    const char *model = ata_present() ? ata_get_model() : 0;
+    graphics_draw_string(x + 80, py, model && model[0] ? model : "No ATA device", 0xFFCCCCCC);
+    py += 22;
+    graphics_draw_string(x + 12, py, "Disk serial:", 0xFF888888);
+    const char *serial = ata_present() ? ata_get_serial() : 0;
+    graphics_draw_string(x + 80, py, serial && serial[0] ? serial : "Unavailable", 0xFFCCCCCC);
     py += 22;
     char idbuf[24];
     hex64_str(solfs_get_machine_id(), idbuf);
@@ -203,9 +306,9 @@ static void draw_system_tab(int x, int y, int w, int h) {
     graphics_draw_string(x + 80, py, hwid + 7, 0xFFCCCCCC);
 }
 
-static void draw_display_tab(int x, int y, int w, int h) {
-    (void)h; (void)w;
-    int py = y + 16;
+static void draw_display_tab(const struct layout *L) {
+    int x = L->cx;
+    int py = L->cy + 16 - L->scroll;
     graphics_draw_string(x + 12, py, "Resolution:", 0xFF888888);
     char res[32];
     int ri = 0;
@@ -236,9 +339,10 @@ static void draw_display_tab(int x, int y, int w, int h) {
     graphics_draw_string(x + 80, py, "PS/2 Keyboard + Mouse", 0xFFCCCCCC);
 }
 
-static void draw_about_tab(int x, int y, int w, int h) {
-    (void)w; (void)h;
-    int py = y + 30;
+static void draw_about_tab(const struct layout *L) {
+    int x = L->cx;
+    int w = L->cw;
+    int py = L->cy + 30 - L->scroll;
     graphics_draw_string(x + w/2 - 28, py, "Solis OS", 0xFF4A90E2);
     py += 24;
     graphics_draw_string(x + w/2 - 40, py, "Version 1.0", 0xFFCCCCCC);
@@ -276,8 +380,9 @@ static void append_int2(char *buf, int *idx, int value) {
     buf[(*idx)++] = '0' + (value % 10);
 }
 
-static void draw_time_tab(int x, int y, int w, int h) {
-    (void)h;
+static void draw_time_tab(const struct layout *L) {
+    int x = L->cx;
+    int w = L->cw;
     static const char *weekday_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
     static const char *month_names[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
@@ -285,7 +390,7 @@ static void draw_time_tab(int x, int y, int w, int h) {
     struct rtc_time t;
     rtc_get_time(&t);
 
-    int py = y + 16;
+    int py = L->cy + 16 - L->scroll;
 
     graphics_draw_string(x + 12, py, "Time:", 0xFF888888);
     char tbuf[16];
@@ -354,6 +459,7 @@ void settings_init(void) {
     sel_color = 0;
     hover_tab = -1;
     hover_tz = -1;
+    for (int i = 0; i < NUM_TABS; i++) tab_scroll[i] = 0;
 }
 
 void settings_draw(int x, int y, int w, int h) {
@@ -375,24 +481,49 @@ void settings_draw(int x, int y, int w, int h) {
         graphics_draw_string(lx, ty + 8, tabs[i], tc);
     }
 
-    int cx = x + SIDEBAR_W + 1;
-    int cw = w - SIDEBAR_W - 1;
+    struct layout L;
+    compute_layout(&L, x, y, w, h);
 
-    graphics_fill_rect(cx, y, cw, 1, 0xFF333333);
-    graphics_fill_rect(cx, y + 1, cw, 28, 0xFF2A2A2A);
+    graphics_fill_rect(L.cx, y, L.cw, 1, 0xFF333333);
+    graphics_fill_rect(L.cx, y + 1, L.cw, 28, 0xFF2A2A2A);
     const char *title = tabs[settings_tab];
     int tw2 = 0;
     for (const char *p = title; *p; p++) tw2 += 8;
-    graphics_draw_string(cx + (cw - tw2) / 2, y + 8, title, 0xFFEEEEEE);
-    graphics_fill_rect(cx, y + 29, cw, 1, 0xFF333333);
+    graphics_draw_string(L.cx + (L.cw - tw2) / 2, y + 8, title, 0xFFEEEEEE);
+    graphics_fill_rect(L.cx, y + 29, L.cw, 1, 0xFF333333);
 
     switch (settings_tab) {
-        case 0: draw_appearance_tab(cx, y + 30, cw, h - 30); break;
-        case 1: draw_system_tab(cx, y + 30, cw, h - 30); break;
-        case 2: draw_display_tab(cx, y + 30, cw, h - 30); break;
-        case 3: draw_time_tab(cx, y + 30, cw, h - 30); break;
-        case 4: draw_about_tab(cx, y + 30, cw, h - 30); break;
+        case 0: draw_appearance_tab(&L); break;
+        case 1: draw_system_tab(&L); break;
+        case 2: draw_display_tab(&L); break;
+        case 3: draw_time_tab(&L); break;
+        case 4: draw_about_tab(&L); break;
     }
+
+    /* Scrollbar, only when the content actually overflows. Drawn over the
+     * content, so the content width is reduced by its width. */
+    int maxs = L.content_h - L.view_h;
+    if (maxs > 0) {
+        const int bar_w = 8;
+        int track_x = L.cx + L.cw - bar_w;
+        graphics_fill_rect(track_x, L.cy, bar_w, L.view_h, 0xFF1A1A1A);
+        int thumb_h = L.view_h * L.view_h / L.content_h;
+        if (thumb_h < 24) thumb_h = 24;
+        int span = L.view_h - thumb_h;
+        int thumb_y = L.cy + (span ? L.scroll * span / maxs : 0);
+        graphics_fill_rect(track_x, thumb_y, bar_w, thumb_h, 0xFF4A4A4A);
+        graphics_fill_rect(track_x, thumb_y, bar_w, 2, 0xFF5E5E5E);
+    }
+}
+
+void settings_handle_scroll(int x, int y, int w, int h, int notches) {
+    (void)x; (void)y;
+    /* notches is positive when the wheel is turned up, which moves the
+     * content down, the same way a document view does. */
+    tab_scroll[settings_tab] -= notches * SCROLL_STEP;
+
+    struct layout L;
+    compute_layout(&L, 0, 0, w, h);
 }
 
 void settings_handle_key(char key) {
@@ -402,7 +533,6 @@ void settings_handle_key(char key) {
 }
 
 void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y) {
-    (void)h;
     hover_tab = -1;
     hover_tz = -1;
     int ntabs = NUM_TABS;
@@ -411,53 +541,48 @@ void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y)
         if (mouse_x >= x + 4 && mouse_x < x + SIDEBAR_W - 4 &&
             mouse_y >= ty && mouse_y < ty + TAB_H - 4) {
             hover_tab = i;
-            if (mouse_y >= ty && mouse_y < ty + TAB_H - 4) {
-                settings_tab = i;
-                return;
-            }
+            settings_tab = i;
+            return;
         }
     }
 
-    if (settings_tab == 0) {
-        int py = y + 30 + 12 + 24;
-        struct { int id; } themes[] = {{GUI_THEME_SOLID}, {GUI_THEME_GNOME}, {GUI_THEME_SUNSET}, {GUI_THEME_CHERRY_BLOSSOM}, {GUI_THEME_STARFIELD}};
-        int nthemes = 5;
-        int tw = ((w - SIDEBAR_W - 1) - 40) / nthemes;
-        if (tw > 130) tw = 130;
-        int th = tw * 3 / 4;
-        if (th > 90) th = 90;
-        int total_w = nthemes * tw + (nthemes - 1) * 10;
-        int start_x = (x + SIDEBAR_W + 1) + ((w - SIDEBAR_W - 1) - total_w) / 2;
+    struct layout L;
+    compute_layout(&L, x, y, w, h);
 
+    if (settings_tab == 0) {
+        int nthemes = theme_count();
+        int ty = L.theme_y - L.scroll;
         for (int i = 0; i < nthemes; i++) {
-            int cx = start_x + i * (tw + 10);
-            if (mouse_x >= cx && mouse_x < cx + tw && mouse_y >= py && mouse_y < py + th) {
-                gui_set_theme(themes[i].id);
+            int col = i % L.theme_cols, grid_row = i / L.theme_cols;
+            int cx = L.theme_start + col * (L.theme_w + 8);
+            int cy = ty + grid_row * (L.theme_h + 8);
+            if (mouse_x >= cx && mouse_x < cx + L.theme_w &&
+                mouse_y >= cy && mouse_y < cy + L.theme_h) {
+                static const int theme_ids[] = {GUI_THEME_SOLID, GUI_THEME_GNOME,
+                                                GUI_THEME_SUNSET, GUI_THEME_CHERRY_BLOSSOM,
+                                                GUI_THEME_STARFIELD, GUI_THEME_BORED,
+                                                GUI_THEME_AURORA};
+                gui_set_theme(theme_ids[i]);
                 return;
             }
         }
 
-        int col_py = py + th + 24 + 20;
-        int cols = 4;
-        int sw = 50, sh = 50, gap = 10;
-        int col_start = (x + SIDEBAR_W + 1) + ((w - SIDEBAR_W - 1) - (cols * sw + (cols - 1) * gap)) / 2;
+        int sy = L.swatch_y - L.scroll;
         for (int i = 0; i < COLORS; i++) {
-            int cx = col_start + (i % cols) * (sw + gap);
-            int cy = col_py + (i / cols) * (sh + gap + 16);
-            if (mouse_x >= cx && mouse_x < cx + sw && mouse_y >= cy && mouse_y < cy + sh) {
+            int cx = L.swatch_start + (i % 4) * (L.swatch_w + L.swatch_gap);
+            int cy = sy + (i / 4) * (L.swatch_h + L.swatch_gap + 16);
+            if (mouse_x >= cx && mouse_x < cx + L.swatch_w &&
+                mouse_y >= cy && mouse_y < cy + L.swatch_h) {
                 sel_color = i;
                 gui_set_bg_color(color_presets[i]);
                 return;
             }
         }
     } else if (settings_tab == 3) {
-        int content_x = x + SIDEBAR_W + 1;
-        int content_w = w - SIDEBAR_W - 1;
-        int ry0 = y + 30 + 86;
         int n = rtc_get_timezone_count();
         for (int i = 0; i < n; i++) {
-            int ry = ry0 + i * 20;
-            if (mouse_x >= content_x + 8 && mouse_x < content_x + content_w - 8 &&
+            int ry = L.tz_y - L.scroll + i * 20;
+            if (mouse_x >= L.cx + 8 && mouse_x < L.cx + L.cw - 8 &&
                 mouse_y >= ry && mouse_y < ry + 18) {
                 hover_tz = i;
                 rtc_set_timezone(i);

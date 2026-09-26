@@ -12,13 +12,46 @@ static struct framebuffer_info framebuffer = {0};
 static uint8_t *framebuffer_data = 0;
 static uint32_t framebuffer_width = 0;
 static uint32_t framebuffer_height = 0;
+#define FRAME_STAGE_MAX_W 1280
+#define FRAME_STAGE_MAX_H 960
+static uint32_t frame_stage[FRAME_STAGE_MAX_W * FRAME_STAGE_MAX_H]
+    __attribute__((section(".frame_stage")));
+static uint8_t *frame_target;
+static uint32_t frame_x, frame_y, frame_w, frame_h;
+static uint32_t frame_write_base;
+static bool frame_active;
 
 static uint32_t bg_color = 0xFF1B1B1B;
+
+/*
+ * Clip rectangle. Every drawing primitive is confined to it, which is what
+ * stops an app from painting over its window border, a neighbouring window,
+ * or the taskbar. Bounds are half-open: [x0, x1) x [y0, y1).
+ */
+#define CLIP_STACK_MAX 8
+static uint32_t clip_x0, clip_y0, clip_x1, clip_y1;
+static struct { uint32_t x0, y0, x1, y1; } clip_stack[CLIP_STACK_MAX];
+static int clip_depth = 0;
+
+/* Exact count of pixel writes, so incremental rendering can be measured. */
+static volatile uint32_t pixel_writes = 0;
+
+static void clip_init(void) {
+    clip_x0 = 0;
+    clip_y0 = 0;
+    clip_x1 = framebuffer_width;
+    clip_y1 = framebuffer_height;
+    clip_depth = 0;
+}
 
 static void framebuffer_set_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (!framebuffer.present || x >= framebuffer_width || y >= framebuffer_height) {
         return;
     }
+    if (x < clip_x0 || x >= clip_x1 || y < clip_y0 || y >= clip_y1) {
+        return;
+    }
+    pixel_writes++;
 
     uint8_t *pixel = framebuffer_data + y * framebuffer.pitch + x * framebuffer.bytes_per_pixel;
     switch (framebuffer.bytes_per_pixel) {
@@ -54,6 +87,10 @@ static void framebuffer_set_pixel(uint32_t x, uint32_t y, uint32_t color) {
 }
 
 static inline void framebuffer_put32(uint32_t x, uint32_t y, uint32_t color) {
+    if (x < clip_x0 || x >= clip_x1 || y < clip_y0 || y >= clip_y1) {
+        return;
+    }
+    pixel_writes++;
     *(volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch + x * 4) = color;
 }
 
@@ -101,6 +138,8 @@ void graphics_init(uint32_t multiboot_info) {
     framebuffer.green_field_position = framebuffer_tag->framebuffer_green_field_position;
     framebuffer.blue_field_position = framebuffer_tag->framebuffer_blue_field_position;
 
+    clip_init();
+
     console_write("[FB] addr=");
     console_write_hex((uint32_t)(uintptr_t)framebuffer.address);
     console_write(" w=");
@@ -126,17 +165,19 @@ void graphics_clear(uint32_t color) {
     }
     bg_color = color;
     if (framebuffer.bytes_per_pixel == 4) {
-        volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data);
-        uint32_t pitch_words = framebuffer.pitch / 4;
-        for (uint32_t y = 0; y < framebuffer_height; ++y) {
-            for (uint32_t x = 0; x < framebuffer_width; ++x) {
-                row[x] = color;
+        for (uint32_t y = clip_y0; y < clip_y1; ++y) {
+            volatile uint32_t *row =
+                (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + clip_x0;
+            uint32_t pitch_words = framebuffer.pitch / 4;
+            for (uint32_t x = clip_x0; x < clip_x1; ++x) {
+                row[x - clip_x0] = color;
             }
+            pixel_writes += (clip_x1 - clip_x0);
             row += pitch_words;
         }
     } else {
-        for (uint32_t y = 0; y < framebuffer_height; ++y) {
-            for (uint32_t x = 0; x < framebuffer_width; ++x) {
+        for (uint32_t y = clip_y0; y < clip_y1; ++y) {
+            for (uint32_t x = clip_x0; x < clip_x1; ++x) {
                 framebuffer_set_pixel(x, y, color);
             }
         }
@@ -146,7 +187,6 @@ void graphics_clear(uint32_t color) {
 void graphics_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     framebuffer_set_pixel(x, y, color);
 }
-
 uint32_t graphics_get_pixel(uint32_t x, uint32_t y) {
     if (!framebuffer.present || x >= framebuffer_width || y >= framebuffer_height)
         return 0;
@@ -175,23 +215,50 @@ uint32_t graphics_get_pixel(uint32_t x, uint32_t y) {
     }
 }
 
+/* Intersect a rect with the clip. Done in 64-bit signed arithmetic on
+ * purpose: subtracting the clip edge from the rect size underflows when the
+ * rect lies entirely outside the clip, and the resulting huge size then
+ * slips past the later bounds check and runs the fill loop for billions of
+ * iterations. */
+static int clip_rect(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h) {
+    int64_t x0 = *x, y0 = *y;
+    int64_t x1 = (int64_t)*x + (int64_t)*w;
+    int64_t y1 = (int64_t)*y + (int64_t)*h;
+
+    if (x0 < (int64_t)clip_x0) x0 = clip_x0;
+    if (y0 < (int64_t)clip_y0) y0 = clip_y0;
+    if (x1 > (int64_t)clip_x1) x1 = clip_x1;
+    if (y1 > (int64_t)clip_y1) y1 = clip_y1;
+
+    if (x1 <= x0 || y1 <= y0) return 0;
+
+    *x = (uint32_t)x0;
+    *y = (uint32_t)y0;
+    *w = (uint32_t)(x1 - x0);
+    *h = (uint32_t)(y1 - y0);
+    return 1;
+}
+
 void graphics_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
     if (!framebuffer.present || width == 0 || height == 0) return;
     if (x >= framebuffer_width || y >= framebuffer_height) return;
     if (x + width > framebuffer_width) width = framebuffer_width - x;
     if (y + height > framebuffer_height) height = framebuffer_height - y;
 
+    if (!clip_rect(&x, &y, &width, &height)) return;
+
     if (framebuffer.bytes_per_pixel == 4) {
         volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x;
         uint32_t pitch_words = framebuffer.pitch / 4;
         for (uint32_t r = 0; r < height; r++) {
             for (uint32_t c = 0; c < width; c++) row[c] = color;
+            pixel_writes += width;
             row += pitch_words;
         }
     } else {
-        for (uint32_t row = y; row < y + height; ++row) {
-            for (uint32_t col = x; col < x + width; ++col) {
-                framebuffer_set_pixel(col, row, color);
+        for (uint32_t r = 0; r < height; r++) {
+            for (uint32_t c = 0; c < width; c++) {
+                framebuffer_set_pixel(x + c, y + r, color);
             }
         }
     }
@@ -322,9 +389,20 @@ void graphics_draw_string(uint32_t x, uint32_t y, const char *text, uint32_t col
         if (px + 8 >= framebuffer_width || py + 16 >= framebuffer_height) {
             break;
         }
+        /* Stop once the glyph starts past the clip edge. Descenders are not
+         * an issue because the 16px cell fully contains every glyph. */
+        if (px >= clip_x1 || py >= clip_y1) {
+            break;
+        }
+        if (px + 8 <= clip_x0 || py + 16 <= clip_y0) {
+            px += 8;
+            continue;
+        }
         unsigned char ch = (unsigned char)*p;
+        if (ch > 127) ch = '?';
         for (uint32_t row = 0; row < 16; ++row) {
             uint8_t bits = font8x16[ch][row];
+            if (!bits) continue;
             for (uint32_t col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
                     if (fast) framebuffer_put32(px + col, py + row, color);
@@ -338,8 +416,109 @@ void graphics_draw_string(uint32_t x, uint32_t y, const char *text, uint32_t col
 
 uint32_t graphics_get_width(void) {
     return framebuffer_width;
-}uint32_t graphics_get_height(void) {
+}
+
+uint32_t graphics_get_height(void) {
     return framebuffer_height;
+}
+
+void graphics_reset_clip(void) {
+    clip_x0 = 0;
+    clip_y0 = 0;
+    clip_x1 = framebuffer_width;
+    clip_y1 = framebuffer_height;
+    clip_depth = 0;
+}
+
+void graphics_set_clip(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    clip_x0 = x;
+    clip_y0 = y;
+    clip_x1 = x + w;
+    clip_y1 = y + h;
+    if (clip_x1 > framebuffer_width) clip_x1 = framebuffer_width;
+    if (clip_y1 > framebuffer_height) clip_y1 = framebuffer_height;
+    if (clip_x0 > clip_x1) clip_x0 = clip_x1;
+    if (clip_y0 > clip_y1) clip_y0 = clip_y1;
+}
+
+void graphics_get_clip(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h) {
+    if (x) *x = clip_x0;
+    if (y) *y = clip_y0;
+    if (w) *w = clip_x1 - clip_x0;
+    if (h) *h = clip_y1 - clip_y0;
+}
+
+/* Intersect the new region with the current clip and remember the old one,
+ * so nested layers (window inside desktop inside damage rect) compose. */
+void graphics_push_clip(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (clip_depth < CLIP_STACK_MAX) {
+        clip_stack[clip_depth].x0 = clip_x0;
+        clip_stack[clip_depth].y0 = clip_y0;
+        clip_stack[clip_depth].x1 = clip_x1;
+        clip_stack[clip_depth].y1 = clip_y1;
+        clip_depth++;
+    }
+    /* Intersect against the saved rectangle rather than shrinking w/h in
+     * place, which would underflow for a region entirely outside the clip. */
+    uint32_t nx = clip_x0, ny = clip_y0;
+    uint32_t nw = clip_x1 - clip_x0, nh = clip_y1 - clip_y0;
+    int64_t x0 = x, y0 = y, x1 = (int64_t)x + w, y1 = (int64_t)y + h;
+    if (x0 < nx) x0 = nx;
+    if (y0 < ny) y0 = ny;
+    if (x1 > (int64_t)nx + nw) x1 = (int64_t)nx + nw;
+    if (y1 > (int64_t)ny + nh) y1 = (int64_t)ny + nh;
+    if (x1 <= x0 || y1 <= y0) { w = 0; h = 0; x = nx; y = ny; }
+    else { x = (uint32_t)x0; y = (uint32_t)y0; w = (uint32_t)(x1 - x0); h = (uint32_t)(y1 - y0); }
+    graphics_set_clip(x, y, w, h);
+}
+
+void graphics_pop_clip(void) {
+    if (clip_depth <= 0) return;
+    clip_depth--;
+    clip_x0 = clip_stack[clip_depth].x0;
+    clip_y0 = clip_stack[clip_depth].y0;
+    clip_x1 = clip_stack[clip_depth].x1;
+    clip_y1 = clip_stack[clip_depth].y1;
+}
+
+bool graphics_begin_frame(void) {
+    if (!framebuffer.present || frame_active || framebuffer.bytes_per_pixel != 4 ||
+        framebuffer_width > FRAME_STAGE_MAX_W || framebuffer_height > FRAME_STAGE_MAX_H ||
+        framebuffer.pitch > FRAME_STAGE_MAX_W * 4)
+        return false;
+
+    graphics_get_clip(&frame_x, &frame_y, &frame_w, &frame_h);
+    frame_target = framebuffer_data;
+    frame_write_base = pixel_writes;
+    for (uint32_t y = frame_y; y < frame_y + frame_h; y++) {
+        volatile uint32_t *src = (volatile uint32_t *)(frame_target + y * framebuffer.pitch) + frame_x;
+        uint32_t *dst = (uint32_t *)((uint8_t *)frame_stage + y * framebuffer.pitch) + frame_x;
+        for (uint32_t x = 0; x < frame_w; x++) dst[x] = src[x];
+    }
+    framebuffer_data = (uint8_t *)frame_stage;
+    frame_active = true;
+    return true;
+}
+
+void graphics_end_frame(void) {
+    if (!frame_active) return;
+    uint8_t *stage = framebuffer_data;
+    framebuffer_data = frame_target;
+    for (uint32_t y = frame_y; y < frame_y + frame_h; y++) {
+        volatile uint32_t *dst = (volatile uint32_t *)(frame_target + y * framebuffer.pitch) + frame_x;
+        uint32_t *src = (uint32_t *)(stage + y * framebuffer.pitch) + frame_x;
+        for (uint32_t x = 0; x < frame_w; x++) dst[x] = src[x];
+    }
+    pixel_writes = frame_write_base + frame_w * frame_h;
+    frame_active = false;
+}
+
+uint32_t graphics_pixel_writes(void) {
+    return pixel_writes;
+}
+
+void graphics_reset_pixel_counter(void) {
+    pixel_writes = 0;
 }
 
 void graphics_blit_rgb(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
@@ -348,6 +527,7 @@ void graphics_blit_rgb(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     if (x >= framebuffer_width || y >= framebuffer_height) return;
     if (x + w > framebuffer_width) w = framebuffer_width - x;
     if (y + h > framebuffer_height) h = framebuffer_height - y;
+    if (!clip_rect(&x, &y, &w, &h)) return;
 
     if (framebuffer.bytes_per_pixel == 4) {
         volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x;
@@ -355,6 +535,7 @@ void graphics_blit_rgb(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
         for (uint32_t r = 0; r < h; r++) {
             const uint32_t *src = pixels + (uint32_t)r * src_w;
             for (uint32_t c = 0; c < w; c++) row[c] = src[c];
+            pixel_writes += w;
             row += pitch_words;
         }
     } else {
@@ -458,15 +639,22 @@ void graphics_fill_circle(uint32_t cx, uint32_t cy, uint32_t r, uint32_t color) 
             int32_t ady = dy < 0 ? -dy : dy;
             int32_t adx = 0;
             while ((adx + 1) * (adx + 1) + ady * ady <= (int32_t)(r * r)) adx++;
-            uint32_t y = (uint32_t)((int32_t)cy + dy);
-            if (y >= framebuffer_height) continue;
-            uint32_t x0 = (adx > (int32_t)cx) ? 0 : (cx - (uint32_t)adx);
-            uint32_t x1 = cx + (uint32_t)adx;
-            if (x1 >= framebuffer_width) x1 = framebuffer_width - 1;
-            if (x1 >= x0) {
-                volatile uint32_t *row = (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x0;
-                for (uint32_t c = x0; c <= x1; c++) row[c - x0] = color;
-            }
+            /* Clamp the span to the clip: this path writes straight to the
+             * framebuffer, so without this a circle would paint outside the
+             * window it belongs to. */
+            int64_t sx = (int64_t)cx - adx;
+            int64_t ex = (int64_t)cx + adx;
+            if (sx < (int64_t)clip_x0) sx = clip_x0;
+            if (ex > (int64_t)clip_x1 - 1) ex = (int64_t)clip_x1 - 1;
+            int64_t sy = (int64_t)cy + dy;
+            if (sy < (int64_t)clip_y0 || sy >= (int64_t)clip_y1) continue;
+            if (sx < 0) sx = 0;
+            if (ex >= (int64_t)framebuffer_width) ex = (int64_t)framebuffer_width - 1;
+            if (ex < sx) continue;
+            volatile uint32_t *row =
+                (volatile uint32_t *)(framebuffer_data + (uint32_t)sy * framebuffer.pitch) + (uint32_t)sx;
+            for (int64_t c = sx; c <= ex; c++) row[c - sx] = color;
+            pixel_writes += (uint32_t)(ex - sx + 1);
         }
         return;
     }

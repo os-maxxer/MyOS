@@ -45,6 +45,7 @@ struct syscall_table {
 
     int  (*ata_present)(void);
     const char* (*ata_get_serial)(void);
+    const char* (*ata_get_model)(void);
 
     /* System info */
     uint32_t (*sys_get_total_ram)(void);
@@ -75,6 +76,8 @@ struct syscall_table {
 
     /* Modal save dialog. Returns 1 on save with out_path filled, 0 on cancel. */
     int  (*gui_save_dialog)(const char *suggested, char *out_path, int out_max);
+    int  (*gui_open_dialog)(char *out_path, int out_max);
+    int  (*gui_open_with)(int slot, const char *path);
 };
 
 #endif

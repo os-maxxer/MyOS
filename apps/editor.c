@@ -163,6 +163,44 @@ static void save_file(void) {
     set_status("Saved");
 }
 
+static void editor_load_path(const char *path) {
+    int fd = vfs_open(path);
+    if (fd < 0) { set_status("Cannot open file"); return; }
+
+    uint8_t contents[EDIT_BUF];
+    int size = vfs_read(fd, contents, sizeof(contents));
+    if (size < 0) { set_status("Cannot read file"); return; }
+    for (int i = 0; i < EDIT_BUF; i++) buffer[i] = ' ';
+    row = 0; col = 0; top_row = 0;
+    for (int i = 0; i < size && row < EDIT_ROWS; i++) {
+        char c = (char)contents[i];
+        if (c == '\n') { row++; col = 0; }
+        else if (c == '\r') continue;
+        else if (col < EDIT_COLS) buffer[row * EDIT_COLS + col++] = c;
+    }
+    if (row >= EDIT_ROWS) row = EDIT_ROWS - 1;
+
+    int len = str_len(path), start = len;
+    while (start > 0 && path[start - 1] != '/') start--;
+    int i = 0;
+    while (path[start] && i < MAX_FNAME - 1) cur_file[i++] = path[start++];
+    cur_file[i] = '\0';
+    set_status("Loaded file");
+}
+
+void editor_open_file(const char *path) {
+    if (path) editor_load_path(path);
+}
+
+static void load_file(void) {
+    char path[64];
+    if (!gui_open_dialog(path, sizeof(path))) {
+        set_status("Load cancelled");
+        return;
+    }
+    editor_load_path(path);
+}
+
 static void draw_text(int x, int y, const char *t, uint32_t c) {
     graphics_draw_string(x, y, t, c);
 }
@@ -408,8 +446,7 @@ void editor_handle_mouse(int win_x, int win_y, int win_w, int win_h, int mx, int
             return;
         }
         if (rel_x >= 108 && rel_x < 158) {
-            /* Load button - prompt for filename in status bar */
-            set_status("Click on desktop icon to run terminal; use cat/write");
+            load_file();
             return;
         }
         if (rel_x >= 156 && rel_x < 162) {

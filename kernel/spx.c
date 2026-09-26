@@ -148,6 +148,7 @@ void spx_init_syscalls(void) {
     sys_table.gui_set_theme  = gui_set_theme;
     sys_table.ata_present    = spx_ata_present;
     sys_table.ata_get_serial = ata_get_serial;
+    sys_table.ata_get_model  = ata_get_model;
     sys_table.sys_get_total_ram = sys_get_total_ram;
     sys_table.sys_get_cpu_brand = sys_get_cpu_brand;
     sys_table.spx_install    = spx_install;
@@ -171,6 +172,8 @@ void spx_init_syscalls(void) {
     sys_table.rtc_get_timezone_name  = rtc_get_timezone_name;
     sys_table.rtc_get_timezone_offset = rtc_get_timezone_offset;
     sys_table.gui_save_dialog       = gui_save_dialog;
+    sys_table.gui_open_dialog       = gui_open_dialog;
+    sys_table.gui_open_with         = gui_open_with;
 
     struct syscall_table *target = (struct syscall_table *)SYSCALL_TABLE_ADDR;
     *target = sys_table;
@@ -235,6 +238,9 @@ void spx_init(struct embedded_spx *apps, int count) {
         app_slots[i].exports.draw = exp->draw;
         app_slots[i].exports.handle_key = exp->handle_key;
         app_slots[i].exports.handle_mouse = exp->handle_mouse;
+        app_slots[i].exports.handle_scroll = exp->handle_scroll;
+        app_slots[i].exports.handle_context = exp->handle_context;
+        app_slots[i].exports.open_file = exp->open_file;
 
         if (app_slots[i].exports.init)
             app_slots[i].exports.init();
@@ -284,6 +290,9 @@ static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
     app_slots[slot].exports.draw = exp->draw;
     app_slots[slot].exports.handle_key = exp->handle_key;
     app_slots[slot].exports.handle_mouse = exp->handle_mouse;
+    app_slots[slot].exports.handle_scroll = exp->handle_scroll;
+    app_slots[slot].exports.handle_context = exp->handle_context;
+    app_slots[slot].exports.open_file = exp->open_file;
 
     if (app_slots[slot].exports.init)
         app_slots[slot].exports.init();

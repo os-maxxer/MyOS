@@ -3,6 +3,7 @@
 #include <solis/idt.h>
 #include <solis/pic.h>
 #include <solis/keyboard.h>
+#include <solis/mouse.h>
 #include <solis/pointer.h>
 #include <solis/graphics.h>
 #include <solis/window_manager.h>
@@ -135,6 +136,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
                 if (pointer_poll(&ps)) {
                     gui_handle_mouse(ps.dx, ps.dy, ps.buttons);
                 }
+                gui_handle_scroll(mouse_take_wheel());
                 if (keyboard_has_input()) {
                     char key = 0;
                     if (keyboard_read_char(&key)) {
@@ -155,11 +157,15 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
                 }
 
                 if (gui_needs_redraw()) {
-                    uint32_t now = timer_get_ticks();
-                    if (now - last_redraw >= 1) {
-                        desktop_redraw();
-                        last_redraw = now;
+                    /* Rate-limit, but never drop the frame: skipping the
+                     * redraw and falling through to hlt leaves the UI stale
+                     * until some unrelated interrupt arrives, which is what
+                     * makes the whole shell feel laggy to drag a window. */
+                    while ((uint32_t)(timer_get_ticks() - last_redraw) < 1) {
+                        __asm__ volatile("hlt");
                     }
+                    desktop_redraw();
+                    last_redraw = timer_get_ticks();
                 }
 
                 uint32_t now_ticks = timer_get_ticks();

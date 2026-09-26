@@ -158,6 +158,27 @@ void __attribute__((cdecl)) isr_common_handler(struct registers *regs) {
     console_write("Interrupt: ");
     console_write_dec(regs->int_no);
     console_write("\n");
+    console_write("[FAULT] eip=");
+    console_write_hex(regs->eip);
+    console_write(" err=");
+    console_write_hex(regs->err_code);
+    console_write(" eax=");
+    console_write_hex(regs->eax);
+    console_write(" ebx=");
+    console_write_hex(regs->ebx);
+    console_write(" ecx=");
+    console_write_hex(regs->ecx);
+    console_write(" edx=");
+    console_write_hex(regs->edx);
+    console_write(" esp=");
+    console_write_hex(regs->esp);
+    console_write(" ebp=");
+    console_write_hex(regs->ebp);
+    console_write(" esi=");
+    console_write_hex(regs->esi);
+    console_write(" edi=");
+    console_write_hex(regs->edi);
+    console_write("\n");
     for (;;)
         ;
 }

@@ -5,6 +5,8 @@
 #include <solis/ports.h>
 #include <solis/spx.h>
 #include <solis/dbg.h>
+#include <solis/ata.h>
+#include <solis/apps/cinterp.h>
 #include <stdbool.h>
 
 extern int gui_launch_app(int slot);
@@ -19,12 +21,12 @@ extern void dbg_get_health(struct dbg_health *out);
 #define TERM_BUF (TERM_ROWS * TERM_COLS)
 #define LINE_BUF 256
 
-#define TERM_COL_BG     0xFF0B1120
-#define TERM_COL_PANE   0xFF111C2B
-#define TERM_COL_TEXT   0xFFEAF3FF
-#define TERM_COL_ACCENT 0xFF7DD3FC
-#define TERM_COL_MUTED  0xFF8FA8BF
-#define TERM_COL_OK     0xFF7EE39E
+#define TERM_COL_BG     0xFF11131D
+#define TERM_COL_PANE   0xFF242331
+#define TERM_COL_TEXT   0xFFFFF4DF
+#define TERM_COL_ACCENT 0xFFFFB84D
+#define TERM_COL_MUTED  0xFFAAA6B5
+#define TERM_COL_OK     0xFFFFD166
 
 #define TERM_ATTR_NORMAL 0
 #define TERM_ATTR_PROMPT 1
@@ -122,9 +124,36 @@ static void int_to_str(int n, char *buf) {
     buf[bi] = '\0';
 }
 
+static void u32_to_str(uint32_t value, char *buf) {
+    char digits[12];
+    int count = 0;
+    if (value == 0) digits[count++] = '0';
+    while (value > 0) { digits[count++] = '0' + value % 10; value /= 10; }
+    int i = 0;
+    while (count > 0) buf[i++] = digits[--count];
+    buf[i] = '\0';
+}
+
+static void term_print_u32(uint32_t value) {
+    char buf[12];
+    u32_to_str(value, buf);
+    term_print(buf);
+}
+
+static void term_print_hex64(uint64_t value) {
+    const char *hex = "0123456789ABCDEF";
+    char buf[17];
+    for (int i = 15; i >= 0; i--) {
+        buf[i] = hex[value & 0x0F];
+        value >>= 4;
+    }
+    buf[16] = '\0';
+    term_print(buf);
+}
+
 static void shell_prompt(void) {
     term_fg = TERM_ATTR_PROMPT;
-    term_print("solis@myos ");
+    term_print("helios@solis ");
     term_print(vfs_get_cwd());
     term_print("$ ");
     term_fg = TERM_ATTR_NORMAL;
@@ -188,6 +217,17 @@ static void lang_print_int(int value) {
 
 static int lang_load(const char *path, char *source, int max) {
     int fd = vfs_open(path);
+    if (fd < 0) {
+        int length = str_len(path);
+        int suffix = length >= 4 && path[length - 4] == '.' &&
+                     path[length - 3] == 'l' && path[length - 2] == 'u' && path[length - 1] == 'a' ? 4 :
+                     length >= 2 && path[length - 2] == '.' && path[length - 1] == 'c' ? 2 : 0;
+        if (!suffix || length - suffix >= 64) return -1;
+        char extensionless[64];
+        for (int i = 0; i < length - suffix; i++) extensionless[i] = path[i];
+        extensionless[length - suffix] = '\0';
+        fd = vfs_open(extensionless);
+    }
     if (fd < 0) return -1;
     int size = vfs_read(fd, (uint8_t *)source, (uint32_t)(max - 1));
     if (size < 0) return -1;
@@ -195,18 +235,49 @@ static int lang_load(const char *path, char *source, int max) {
     return size;
 }
 
-static void lang_print_argument(const char *argument) {
-    while (lang_is_space(*argument)) argument++;
-    int length = str_len(argument);
-    while (length > 0 && (argument[length - 1] == ')' || argument[length - 1] == ';' ||
-                          lang_is_space(argument[length - 1]))) length--;
-    if (length >= 2 && argument[0] == '"' && argument[length - 1] == '"') {
-        for (int i = 1; i < length - 1; i++) term_putchar(argument[i]);
+static void lang_print_segment(const char *text, int start, int end) {
+    while (start < end && lang_is_space(text[start])) start++;
+    while (end > start && lang_is_space(text[end - 1])) end--;
+
+    while (end - start >= 2 && text[start] == '(' && text[end - 1] == ')') {
+        int depth = 0, quoted = 0, escaped = 0, wraps = 1;
+        for (int i = start; i < end; i++) {
+            char c = text[i];
+            if (quoted) {
+                if (escaped) escaped = 0;
+                else if (c == '\\') escaped = 1;
+                else if (c == '"') quoted = 0;
+                continue;
+            }
+            if (c == '"') quoted = 1;
+            else if (c == '(') depth++;
+            else if (c == ')' && --depth == 0 && i != end - 1) { wraps = 0; break; }
+        }
+        if (!wraps) break;
+        start++;
+        end--;
+        while (start < end && lang_is_space(text[start])) start++;
+        while (end > start && lang_is_space(text[end - 1])) end--;
+    }
+
+    if (end - start >= 2 && text[start] == '"' && text[end - 1] == '"') {
+        for (int i = start + 1; i < end - 1; i++) {
+            char c = text[i];
+            if (c == '\\' && i + 1 < end - 1) {
+                c = text[++i];
+                if (c == 'n') c = '\n';
+                else if (c == 't') c = '\t';
+                else if (c == 'r') c = '\r';
+            }
+            term_putchar(c);
+        }
         return;
     }
+
     char expression[128];
+    int length = end - start;
     int copy = length < (int)sizeof(expression) - 1 ? length : (int)sizeof(expression) - 1;
-    for (int i = 0; i < copy; i++) expression[i] = argument[i];
+    for (int i = 0; i < copy; i++) expression[i] = text[start + i];
     expression[copy] = '\0';
     int ok = 1;
     int value = lang_eval_expr(expression, &ok);
@@ -214,17 +285,179 @@ static void lang_print_argument(const char *argument) {
     else term_print("<unsupported expression>");
 }
 
+static void lang_print_argument(const char *argument, int length) {
+    while (length > 0 && lang_is_space(argument[length - 1])) length--;
+    if (length > 0 && argument[length - 1] == ';') length--;
+    if (length > 0 && argument[length - 1] == ')') length--;
+
+    int start = 0, depth = 0, quoted = 0, escaped = 0;
+    int concat_start = 0;
+    for (int i = 0; i < length; i++) {
+        char c = argument[i];
+        if (quoted) {
+            if (escaped) escaped = 0;
+            else if (c == '\\') escaped = 1;
+            else if (c == '"') quoted = 0;
+            continue;
+        }
+        if (c == '"') { quoted = 1; continue; }
+        if (c == '(') { depth++; continue; }
+        if (c == ')') { if (depth > 0) depth--; continue; }
+        if (depth != 0) continue;
+
+        if (c == '.' && i + 1 < length && argument[i + 1] == '.') {
+            lang_print_segment(argument, concat_start, i);
+            concat_start = i + 2;
+            i++;
+        } else if (c == ',') {
+            lang_print_segment(argument, concat_start, i);
+            term_putchar('\t');
+            start = i + 1;
+            concat_start = start;
+        }
+    }
+    lang_print_segment(argument, concat_start, length);
+}
+
 static int lang_run_lua(const char *source) {
+    char names[16][24];
+    char values[16][128];
+    int var_count = 0;
     const char *line = source;
     while (*line) {
         const char *next = line;
         while (*next && *next != '\n') next++;
+
+        const char *statement = line;
+        while (statement < next && lang_is_space(*statement)) statement++;
+        if (statement + 5 <= next && statement[0] == 'l' && statement[1] == 'o' &&
+            statement[2] == 'c' && statement[3] == 'a' && statement[4] == 'l' &&
+            lang_is_space(statement[5])) {
+            statement += 5;
+            while (statement < next && lang_is_space(*statement)) statement++;
+        }
+
+        const char *assign = statement;
+        while (assign < next && ((*assign >= 'A' && *assign <= 'Z') ||
+               (*assign >= 'a' && *assign <= 'z') || *assign == '_' ||
+               (*assign >= '0' && *assign <= '9'))) assign++;
+        const char *equals = assign;
+        while (equals < next && lang_is_space(*equals)) equals++;
+        if (assign > statement && equals < next && *equals == '=' &&
+            (equals + 1 == next || equals[1] != '=')) {
+            int name_len = (int)(assign - statement);
+            int slot = -1;
+            for (int v = 0; v < var_count; v++) {
+                int i = 0;
+                while (i < name_len && names[v][i] == statement[i]) i++;
+                if (i == name_len && names[v][i] == '\0') { slot = v; break; }
+            }
+            if (slot < 0 && var_count < 16) slot = var_count++;
+            if (slot >= 0) {
+                if (name_len > 23) name_len = 23;
+                for (int i = 0; i < name_len; i++) names[slot][i] = statement[i];
+                names[slot][name_len] = '\0';
+
+                const char *rhs = equals + 1;
+                while (rhs < next && lang_is_space(*rhs)) rhs++;
+                int out = 0, quoted = 0, escaped = 0;
+                while (rhs < next && out < 126) {
+                    char c = *rhs;
+                    if (quoted) {
+                        values[slot][out++] = c;
+                        rhs++;
+                        if (escaped) escaped = 0;
+                        else if (c == '\\') escaped = 1;
+                        else if (c == '"') quoted = 0;
+                        continue;
+                    }
+                    if (c == '"') {
+                        quoted = 1;
+                        values[slot][out++] = c;
+                        rhs++;
+                        continue;
+                    }
+                    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
+                        char ident[24];
+                        int n = 0;
+                        while (rhs < next && (((*rhs >= 'A' && *rhs <= 'Z') ||
+                               (*rhs >= 'a' && *rhs <= 'z') || (*rhs >= '0' && *rhs <= '9') || *rhs == '_'))) {
+                            if (n < 23) ident[n++] = *rhs;
+                            rhs++;
+                        }
+                        ident[n] = '\0';
+                        int found = -1;
+                        for (int v = 0; v < var_count; v++)
+                            if (str_eq(names[v], ident)) { found = v; break; }
+                        if (found >= 0) {
+                            for (int i = 0; values[found][i] && out < 126; i++)
+                                values[slot][out++] = values[found][i];
+                        } else {
+                            for (int i = 0; ident[i] && out < 126; i++) values[slot][out++] = ident[i];
+                        }
+                        continue;
+                    }
+                    if (c == ';') break;
+                    values[slot][out++] = c;
+                    rhs++;
+                }
+                while (out > 0 && lang_is_space(values[slot][out - 1])) out--;
+                values[slot][out] = '\0';
+            }
+            line = *next ? next + 1 : next;
+            continue;
+        }
+
         const char *print_call = line;
         while (print_call < next && !(print_call[0] == 'p' && print_call[1] == 'r' &&
                                       print_call[2] == 'i' && print_call[3] == 'n' &&
                                       print_call[4] == 't' && print_call[5] == '(')) print_call++;
         if (print_call < next) {
-            lang_print_argument(print_call + 6);
+            char expanded[512];
+            int out = 0, quoted = 0, escaped = 0;
+            const char *arg = print_call + 6;
+            while (arg < next && out < (int)sizeof(expanded) - 1) {
+                char c = *arg;
+                if (quoted) {
+                    expanded[out++] = c;
+                    arg++;
+                    if (escaped) escaped = 0;
+                    else if (c == '\\') escaped = 1;
+                    else if (c == '"') quoted = 0;
+                    continue;
+                }
+                if (c == '"') {
+                    quoted = 1;
+                    expanded[out++] = c;
+                    arg++;
+                    continue;
+                }
+                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
+                    char ident[24];
+                    int n = 0;
+                    while (arg < next && ((*arg >= 'A' && *arg <= 'Z') ||
+                           (*arg >= 'a' && *arg <= 'z') || (*arg >= '0' && *arg <= '9') || *arg == '_')) {
+                        if (n < 23) ident[n++] = *arg;
+                        arg++;
+                    }
+                    ident[n] = '\0';
+                    int found = -1;
+                    for (int v = 0; v < var_count; v++)
+                        if (str_eq(names[v], ident)) { found = v; break; }
+                    if (found >= 0) {
+                        for (int i = 0; values[found][i] && out < (int)sizeof(expanded) - 1; i++)
+                            expanded[out++] = values[found][i];
+                    } else {
+                        for (int i = 0; ident[i] && out < (int)sizeof(expanded) - 1; i++)
+                            expanded[out++] = ident[i];
+                    }
+                    continue;
+                }
+                expanded[out++] = c;
+                arg++;
+            }
+            expanded[out] = '\0';
+            lang_print_argument(expanded, out);
             term_putchar('\n');
         }
         line = *next ? next + 1 : next;
@@ -233,31 +466,22 @@ static int lang_run_lua(const char *source) {
 }
 
 static int lang_run_c(const char *source) {
-    const char *line = source;
-    while (*line) {
-        const char *next = line;
-        while (*next && *next != '\n') next++;
-        const char *call = line;
-        while (call < next && !(call[0] == 'p' && call[1] == 'r' && call[2] == 'i' &&
-                                call[3] == 'n' && call[4] == 't' && call[5] == 'f' && call[6] == '(') &&
-               !(call[0] == 'p' && call[1] == 'u' && call[2] == 't' && call[3] == 's' && call[4] == '(')) call++;
-        if (call < next) {
-            int offset = (call[3] == 'n') ? 7 : 5;
-            const char *argument = call + offset;
-            if (call[3] == 'n' && argument[0] == '"') {
-                int format_len = 0;
-                while (argument[format_len] && argument[format_len] != '"') format_len++;
-                for (int i = 1; i < format_len; i++) {
-                    if (argument[i] != '%' || argument[i + 1] != 'd') term_putchar(argument[i]);
-                }
-            } else {
-                lang_print_argument(argument);
-            }
-            term_putchar('\n');
-        }
-        line = *next ? next + 1 : next;
+    ci_set_putchar(term_putchar);
+    int result = ci_run(source);
+    const char *error = ci_last_error();
+    if (error) {
+        term_print("C interpreter: ");
+        term_println(error);
+        return -1;
     }
-    return 0;
+    if (result != 0) {
+        char status[16];
+        int_to_str(result, status);
+        term_print("[program exited ");
+        term_print(status);
+        term_println("]");
+    }
+    return result;
 }
 
 static void shell_run_source(const char *command, const char *path) {
@@ -285,22 +509,14 @@ static void shell_compile_c(const char *path) {
         term_println(path);
         return;
     }
-    int has_main = 0;
-    int braces = 0;
-    for (int i = 0; source[i]; i++) {
-        if (source[i] == '{') braces++;
-        else if (source[i] == '}') braces--;
-        if (source[i] == 'i' && source[i + 1] == 'n' && source[i + 2] == 't' &&
-            source[i + 3] == ' ' && source[i + 4] == 'm' && source[i + 5] == 'a' &&
-            source[i + 6] == 'i' && source[i + 7] == 'n') has_main = 1;
-    }
-    if (!has_main || braces != 0) {
-        term_println("cc: compile error (need int main(...) with balanced braces)");
+    if (ci_check(source) != 0) {
+        term_print("cc: ");
+        term_println(ci_last_error() ? ci_last_error() : "syntax error");
         return;
     }
     term_print("Compiled: ");
     term_println(path);
-    term_println("Run with: run <file.c>");
+    term_println("Syntax OK. Run with: run <file.c>");
 }
 
 static void shell_execute(const char *cmd) {
@@ -338,7 +554,7 @@ static void shell_execute(const char *cmd) {
         term_println("  uptime         - show system uptime");
         term_println("  reboot         - restart the system");
         term_println("  calc <a> <op> <b> - calculate a+b, a-b, a*b, a/b");
-        term_println("  neofetch       - show system info");
+        term_println("  neofetch       - Helios system overview");
         term_println("  solpkg          - launch SOLPKG package manager");
         term_println("  ping <ip>      - ICMP ping an IP address");
         term_println("  arp <ip>       - resolve MAC for an IP");
@@ -833,21 +1049,40 @@ static void shell_execute(const char *cmd) {
         term_println("  Status: OK");
 
     } else if (str_eq(command, "neofetch")) {
-        term_println("         .-''''-.          ");
-        term_println("     .--|  _  _ |--.       ");
-        term_println("    /    | ( ) ( |    \\     ");
-        term_println("    |    |  ___  |    |     ");
-        term_println("    |    | |   | |    |     ");
-        term_println("     \\__ | `-'-' | __/     ");
-        term_println("         `-.__.-'          ");
-        term_println("                           ");
-        term_println("  Solis OS 1.1             ");
-        term_println("  ----------------------- ");
-        term_println("  User:  solis@myos        ");
-        term_println("  Kernel: i386 / multiboot ");
-        term_println("  Shell: myosh v2          ");
-        term_println("  WM:    mywm             ");
-        term_println("  Res:   1280x960         ");
+        term_println(".---..----..-.   .-..---. .----..---.");
+            term_print(" \\ \\ | || || |__ | | \\ \\  | || | \\ ");
+            term_putchar('\\');
+            term_putchar('\n');
+        term_println("`---'`----'`----'`-'`---' `----'`---'");
+        term_println("");
+        term_println("  Helios  |  Solis OS 1.1");
+        term_println("  ----------------------");
+        term_print("  Hardware ID: ");
+        term_print_hex64(sys_get_machine_id());
+        term_print("\n  CPU: ");
+        char cpu_brand[48];
+        sys_get_cpu_brand(cpu_brand, sizeof(cpu_brand));
+        term_println(cpu_brand[0] ? cpu_brand : "Unknown CPU");
+        term_print("  Memory: ");
+        term_print_u32(sys_get_total_ram());
+        term_println(" MB");
+        term_print("  Display: ");
+        term_print_u32(graphics_get_width());
+        term_print("x");
+        term_print_u32(graphics_get_height());
+        term_println(" framebuffer");
+        if (ata_present()) {
+            const char *model = ata_get_model();
+            const char *serial = ata_get_serial();
+            term_print("  Disk: ");
+            term_println(model && model[0] ? model : "ATA device");
+            term_print("  Disk ID: ");
+            term_println(serial && serial[0] ? serial : "Unavailable");
+        } else {
+            term_println("  Disk: No ATA device detected");
+        }
+        term_println("  Kernel: i386 / Multiboot2");
+        term_println("  Shell: Helios");
         {
             uint32_t ticks = timer_get_ticks();
             uint32_t secs = ticks / 100;
@@ -907,8 +1142,8 @@ void term_init(void) {
     term_row = 0;
     term_col = 0;
     line_pos = 0;
-    term_print("Solis OS Terminal v1.1 (VFS enabled)\n");
-    term_print("Type 'help' for commands.\n");
+    term_print("Helios shell 1.0 - Solis OS\n");
+    term_print("Type 'help' to list commands.\n");
     shell_prompt();
 }
 
@@ -923,9 +1158,17 @@ void term_draw(int x, int y, int w, int h) {
     graphics_fill_rect(x, y, w, h, TERM_COL_BG);
     graphics_draw_rect(x, y, w, h, 0xFF1D2E41);
     graphics_fill_rect(x + 2, y + 2, w - 4, topbar_h, TERM_COL_PANE);
-    graphics_draw_string(x + 12, y + 6, "solis:terminal", TERM_COL_ACCENT);
-    graphics_draw_string(x + w - 68, y + 6, "1280x960", TERM_COL_MUTED);
-    graphics_fill_rect(x + 2, y + 2 + topbar_h - 1, w - 4, 1, 0xFF1A2A39);
+    graphics_draw_string(x + 12, y + 6, "HELIOS // SOLIS OS", TERM_COL_ACCENT);
+    char resolution[24], number[12];
+    u32_to_str(graphics_get_width(), number);
+    int ri = 0;
+    while (number[ri]) { resolution[ri] = number[ri]; ri++; }
+    resolution[ri++] = 'x';
+    u32_to_str(graphics_get_height(), number);
+    for (int ni = 0; number[ni]; ni++) resolution[ri++] = number[ni];
+    resolution[ri] = '\0';
+    graphics_draw_string(x + w - 8 - ri * 8, y + 6, resolution, TERM_COL_MUTED);
+    graphics_fill_rect(x + 2, y + 2 + topbar_h - 1, w - 4, 1, TERM_COL_ACCENT);
 
     int cols = (content_w - 8) / 8;
     int rows = (content_h - 8) / 16;

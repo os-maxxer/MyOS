@@ -19,44 +19,69 @@ tested to its full extent**:
 ## Features
 
 - **Boot**: GRUB 2 / Multiboot2, 1024x768x32 VBE framebuffer
-- **GUI**: Desktop, window manager, top bar with a live clock, dock, and app grid
+- **GUI**: Desktop, window manager, floating taskbar with pinned launchers and
+  a system tray, and an app grid
+- **Redraw engine**: Entity-based GUI rendering that treats desktop elements,
+  windows, taskbar, mouse, and other GUI components separately and redraws
+  only the entities that have changed
 - **Themes**: Gnome, Sunset, Cherry Blossom, Starfield, and solid colors
-- **Apps**: Terminal, Notepad, Paint, Settings, Files, Task Manager, SOLPKG, Editor, Tetris
+- **Apps**: Helios, Notepad, Paint, Settings, Files, Task Manager, SOLPKG, Editor, Tetris
+- **Languages**: Built-in C and Lua compilers/interpreters, with source runners
+  available through Helios
 - **Filesystem**: SOLFS on an ATA (IDE) disk, plus a small VFS
 - **Networking**: RTL8139 driver with ARP, ping, DNS, and HTTP client support
 - **Input**: PS/2 keyboard + mouse, and an I2C touchpad driver
 - **Time**: CMOS real-time clock driver with a selectable timezone and a
   syscall API usable by applications (see below)
 
+## Screenshots
+
+### Solis OS desktop
+
+![Solis OS desktop](screenshots/solis-desktop.png)
+
+### Helios terminal
+
+![Solis OS Helios terminal](screenshots/solis-helios.png)
+
+### Lua execution
+
+![Solis OS Lua execution](screenshots/solis-lua.png)
+
 ## Applications
 
 Solis ships with nine built-in apps. They are compiled as freestanding
 binaries, wrapped in the SPX package format, and embedded in the kernel. They
-can be launched from the desktop icons, the bottom dock, or the Apps grid
-(launcher button on the left of the top bar):
+can be launched from the desktop icons, the taskbar's pinned launchers, or the
+Apps grid (the launcher button on the left of the taskbar):
 
-| App          | What it does                                                        |
+| App | What it does |
 |--------------|---------------------------------------------------------------------|
-| **Terminal** | Interactive shell with filesystem commands plus Lua and C source runners |
-| **Notepad**  | Plain-text editor with save/load                                    |
-| **Paint**    | Pixel drawing canvas with a palette and brush tools                 |
-| **Settings** | Theme/wallpaper, background color, and timezone configuration        |
-| **Files**    | Browse the SOLFS disk                                                |
-| **Task Manager** | Live CPU load graph and process list                            |
-| **SOLPKG**   | Package manager for the SOLPKG repo                                  |
-| **Editor**   | Source code editor with C syntax highlighting (Ctrl+S save, Ctrl+N new) |
-| **Tetris**   | Classic falling-blocks game                                          |
+| **Helios** | Interactive shell with filesystem commands plus Lua and C source runners |
+| **Notepad** | Plain-text editor with save/load |
+| **Paint** | Pixel drawing canvas with a palette and brush tools |
+| **Settings** | Theme/wallpaper, background color, and timezone configuration |
+| **Files** | Browse the SOLFS disk |
+| **Task Manager** | Live CPU load graph and process list |
+| **SOLPKG** | Package manager for the SOLPKG repo |
+| **Editor** | Source code editor with C syntax highlighting (Ctrl+S save, Ctrl+N new) |
+| **Tetris** | Classic falling-blocks game |
 
 ## Using the desktop
 
-- Click a **desktop icon**, a **dock** entry, or open the **Apps grid** to
-  launch an app. Windows can be dragged by their title bar.
+- Click a **desktop icon**, a **taskbar** launcher, or open the **Apps grid**
+  to launch an app. Windows can be dragged by their title bar.
 - Each window has **minimize**, **maximize**, and **close** buttons (top
-  right) with hover and press feedback; windows cast a soft drop shadow.
-- The **top bar** shows the launcher, open window names, and a live clock.
+  right) that stay flat until hovered; windows cast a soft drop shadow.
+- The **taskbar** is a floating rounded card at the bottom: the launcher on
+  the left, pinned app launchers plus a button per open window in the middle
+  (a dot marks apps that are running), and the tray with RAM, date, and a
+  live clock on the right. Click a window button to focus, minimize, or
+  restore it; pinned launchers shrink automatically when many windows are
+  open.
 - The **Settings** app changes the theme and background in real time.
 - **Settings > Time & Date** changes the clock timezone and saves it for the next boot.
-- The Terminal supports `lua file.lua`, `cc file.c`, and `run file.lua` or `run file.c`.
+- Helios supports `lua file.lua`, `cc file.c`, and `run file.lua` or `run file.c`.
 
 ## Minimum system requirements
 
@@ -106,7 +131,9 @@ Inside Ubuntu/WSL:
 sudo apt update
 sudo apt install build-essential gcc-multilib binutils grub-pc-bin \
   xorriso mtools qemu-system-x86 python3
+
 cd /mnt/d/MyOS
+
 make
 ```
 
@@ -118,6 +145,7 @@ for editing, but its UCRT64 linker is not suitable for the kernel link step.
 ```sh
 make            # builds build/solis.iso and the package-disk SPX files
 make build/disk.img  # also build the SOLFS disk image (built automatically by make run)
+
 make clean      # removes build artifacts
 ```
 
@@ -138,7 +166,7 @@ Other targets:
 make run-serial      # logs kernel serial output to serial.log
 make run-nographic   # headless (serial console)
 make run-dbg         # serial to stdio with a user-mode NIC
-make vbox-disk       # convert build/disk.img to build/disk.vdi for VirtualBox
+make vbox-disk       # convert build/disk.img to build/solis.vdi for VirtualBox
 ```
 
 The default QEMU invocation boots the ISO with the pre-loaded package disk
@@ -149,9 +177,9 @@ model (`-nic user,model=rtl8139`).
 
 Solis reads the date/time from the CMOS real-time clock and treats it as UTC,
 then applies the selected timezone offset. The current time is shown live in
-the top bar. To change the timezone:
+the taskbar tray. To change the timezone:
 
-1. Open **Settings** (desktop icon, dock, or the Apps grid).
+1. Open **Settings** (desktop icon, taskbar launcher, or the Apps grid).
 2. Go to the **Time & Date** tab.
 3. Click a timezone (e.g. *Chicago*, *New York*, *London*, *Tokyo*).
 
@@ -168,6 +196,7 @@ it through the wrappers in `apps/glue.c`.
 #include <solis/rtc.h>
 
 struct rtc_time t;
+
 rtc_get_time(&t);                 /* fills t with local time + date        */
 rtc_set_timezone(3);              /* switch to Chicago (UTC-6)             */
 int  tz = rtc_get_timezone();     /* index of the active timezone          */
@@ -183,12 +212,12 @@ saving is not applied.
 
 ## Project layout
 
-```
+```text
 boot/             boot.S + GRUB config
 kernel/           core kernel: console, gdt/idt/pic, keyboard/mouse, RTC,
                   graphics (VBE), timer (PIT), ATA, SOLFS/VFS, SPX package
                   loader, PCI + RTL8139 networking
-gui/              desktop shell (windows, top bar, dock, app grid, login)
+gui/              desktop shell (windows, taskbar, app grid, login)
 window_manager/   thin facade over the GUI
 desktop/          desktop init/redraw
 apps/             built-in SPX applications + syscall glue

@@ -23,6 +23,7 @@
 
 static bool disk_present = false;
 static char disk_serial[21];
+static char disk_model[41];
 
 static int ata_wait(bool wait_for_drq) {
     int timeout = 1000000;
@@ -71,6 +72,17 @@ bool ata_init(void) {
     }
     for (int i = 19; i >= 0; i--) {
         if (disk_serial[i] == ' ') disk_serial[i] = '\0';
+        else break;
+    }
+
+    for (int i = 0; i < 20; i++) {
+        uint16_t word = id_buf[27 + i];
+        disk_model[i * 2] = (char)(word >> 8);
+        disk_model[i * 2 + 1] = (char)word;
+    }
+    disk_model[40] = '\0';
+    for (int i = 39; i >= 0; i--) {
+        if (disk_model[i] == ' ' || disk_model[i] == '\0') disk_model[i] = '\0';
         else break;
     }
 
@@ -131,4 +143,8 @@ bool ata_present(void) {
 
 const char* ata_get_serial(void) {
     return disk_serial;
+}
+
+const char* ata_get_model(void) {
+    return disk_model;
 }

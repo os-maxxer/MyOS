@@ -31,6 +31,12 @@ struct app_exports {
     void (*handle_key)(char key);
     void (*handle_mouse)(int x, int y, int w, int h, int mx, int my);
     void (*get_size)(int *w, int *h);
+    /* Optional: vertical scroll wheel over the app's client area. `notches`
+     * is positive when scrolling up. Called only when the pointer is inside
+     * the client rect. */
+    void (*handle_scroll)(int x, int y, int w, int h, int notches);
+    void (*handle_context)(int x, int y, int w, int h, int mx, int my);
+    void (*open_file)(const char *path);
 };
 
 #define SPX_SLOT_BASE   0x01000000

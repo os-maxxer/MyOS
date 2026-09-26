@@ -177,20 +177,23 @@ $(BUILD_DIR)/kernel/arch/i386/interrupts.o: $(KERNEL_DIR)/arch/i386/interrupts.a
 $(SPX_DIR)/terminal.o: $(APPS_DIR)/terminal.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(SPX_DIR)/cinterp_terminal.o: $(APPS_DIR)/cinterp.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(SPX_DIR)/glue_terminal.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/terminal_spx_stub.o: $(APPS_DIR)/terminal_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SPX_DIR)/terminal.elf: $(SPX_DIR)/terminal.o $(SPX_DIR)/glue_terminal.o $(SPX_DIR)/terminal_spx_stub.o
+$(SPX_DIR)/terminal.elf: $(SPX_DIR)/terminal.o $(SPX_DIR)/cinterp_terminal.o $(SPX_DIR)/glue_terminal.o $(SPX_DIR)/terminal_spx_stub.o
 	$(LD) -m elf_i386 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01000000 -o $@ $^
 
 $(SPX_DIR)/terminal.bin: $(SPX_DIR)/terminal.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/terminal.spx: $(SPX_DIR)/terminal.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Terminal $@
+	python3 tools/mkspx.py $< Helios $@
 
 $(SPX_DIR)/terminal_spx_embed.o: $(SPX_DIR)/terminal.spx
 	$(OBJCOPY) -I binary -O elf32-i386 -B i386 --rename-section .data=.spx_apps $< $@

@@ -127,6 +127,9 @@ int ata_present(void) {
 const char* ata_get_serial(void) {
     return SYS->ata_get_serial();
 }
+const char* ata_get_model(void) {
+    return SYS->ata_get_model();
+}
 
 int net_available(void) {
     return SYS->net_available();
@@ -139,6 +142,14 @@ int net_http_get(const uint8_t *ip, uint16_t port,
 
 int gui_launch_app(int slot) {
     return SYS->gui_launch_app(slot);
+}
+
+int gui_open_dialog(char *out_path, int out_max) {
+    return SYS->gui_open_dialog(out_path, out_max);
+}
+
+int gui_open_with(int slot, const char *path) {
+    return SYS->gui_open_with(slot, path);
 }
 
 int net_ping(const uint8_t *ip, uint32_t timeout_ms) {
