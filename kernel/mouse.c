@@ -2,6 +2,7 @@
 #include <solis/ports.h>
 #include <solis/pic.h>
 #include <solis/idt.h>
+#include <solis/dbg.h>
 
 static volatile int32_t mouse_dx = 0;
 static volatile int32_t mouse_dy = 0;
@@ -113,6 +114,7 @@ void mouse_init(void) {
 
     mouse_cycle = 0;
 
+    dbg_set_driver_state("mouse", DBG_DRIVER_ACTIVE);
     irq_register_handler(12, mouse_handler);
     pic_enable_irq(12);
 }

@@ -1,5 +1,6 @@
 #include <solis/rtc.h>
 #include <solis/ports.h>
+#include <solis/solfs.h>
 
 #define CMOS_ADDR 0x70
 #define CMOS_DATA 0x71
@@ -74,6 +75,17 @@ static int day_of_week(int year, int month, int day) {
 
 void rtc_init(void) {
     current_tz = 0;
+}
+
+void rtc_load_settings(void) {
+    uint8_t value = 0;
+    int fd = solfs_open("settings/timezone");
+    if (fd < 0) {
+        if (solfs_open("settings") < 0) solfs_mkdir("settings");
+        fd = solfs_create("settings/timezone");
+    }
+    if (fd >= 0 && solfs_read(fd, &value, 1) == 1 && value < RTC_MAX_TIMEZONES)
+        current_tz = value;
 }
 
 void rtc_get_time(struct rtc_time *out) {
@@ -158,8 +170,18 @@ void rtc_get_time(struct rtc_time *out) {
 }
 
 void rtc_set_timezone(int index) {
-    if (index >= 0 && index < RTC_MAX_TIMEZONES)
+    if (index >= 0 && index < RTC_MAX_TIMEZONES) {
         current_tz = index;
+        int fd = solfs_open("settings/timezone");
+        if (fd < 0) {
+            if (solfs_open("settings") < 0) solfs_mkdir("settings");
+            fd = solfs_create("settings/timezone");
+        }
+        if (fd >= 0) {
+            uint8_t value = (uint8_t)index;
+            solfs_write(fd, &value, 1);
+        }
+    }
 }
 
 int rtc_get_timezone(void) {

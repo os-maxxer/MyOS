@@ -3,6 +3,7 @@
 #include <solis/pic.h>
 #include <solis/idt.h>
 #include <solis/console.h>
+#include <solis/dbg.h>
 
 #define KEYBOARD_DATA_PORT 0x60
 #define KEYBOARD_STATUS_PORT 0x64
@@ -144,6 +145,7 @@ int keyboard_consume_func_key(void) {
 }
 
 void keyboard_init(void) {
+    dbg_set_driver_state("keyboard", DBG_DRIVER_ACTIVE);
     irq_register_handler(1, keyboard_handler);
     pic_enable_irq(1);
 }

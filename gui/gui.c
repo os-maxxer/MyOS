@@ -1,9 +1,10 @@
 /*
- * Solis OS desktop environment - BoredOS-inspired lightweight shell.
+ * Solis OS desktop environment - Linux-inspired flat shell with BoredOS
+ * utility and geometry.
  *
  * Direct framebuffer rendering. Flat rectangles, 1px borders, bitmap
- * fonts, square monochrome control glyphs. No transparency, no shadows,
- * no rounded corners, no animation. Stacking window manager.
+ * fonts, crisp control glyphs, and a subtle modern palette inspired by
+ * Linux desktops and classic BoredOS simplicity.
  */
 
 #include <solis/gui.h>
@@ -41,19 +42,19 @@
 /* ------------------------------------------------------------------ */
 /* Palette (BoredOS-inspired, ~14 colors)                              */
 /* ------------------------------------------------------------------ */
-#define C_BG          0xFF2C2F33  /* desktop background (dark slate) */
-#define C_PANEL       0xFF24272B  /* panel / menu background         */
-#define C_PANEL_LINE  0xFF1B1E22  /* panel bevel / border            */
-#define C_ACTIVE      0xFF4C7BD9  /* industrial blue (accent)        */
-#define C_ACTIVE_DK   0xFF3A63B3  /* accent, pressed/darker          */
-#define C_INACTIVE    0xFF3B4048  /* inactive window titlebar        */
-#define C_INACTIVE_DK 0xFF2E3238  /* inactive border                 */
-#define C_WIN_BG      0xFF202225  /* window body                     */
-#define C_TEXT        0xFFEAEAEA  /* primary text                    */
-#define C_TEXT_DIM    0xFF888888  /* secondary text / disabled       */
-#define C_BTN         0xFF3B4048  /* flat button fill                */
-#define C_BTN_HOVER   0xFF474D56  /* flat button hover               */
-#define C_BTN_PRESS   0xFF2F3338  /* flat button pressed             */
+#define C_BG          0xFF0F172A  /* desktop background (Linux slate) */
+#define C_PANEL       0xFF111827  /* panel / menu background          */
+#define C_PANEL_LINE  0xFF243244  /* panel bevel / border             */
+#define C_ACTIVE      0xFF5DA9FF  /* modern Linux blue                */
+#define C_ACTIVE_DK   0xFF3E7BE1  /* accent, pressed/darker           */
+#define C_INACTIVE    0xFF1B2430  /* inactive window titlebar         */
+#define C_INACTIVE_DK 0xFF101924  /* inactive border                  */
+#define C_WIN_BG      0xFF101821  /* window body                      */
+#define C_TEXT        0xFFEAF3FF  /* primary text                     */
+#define C_TEXT_DIM    0xFF94A3B8  /* secondary text / disabled        */
+#define C_BTN         0xFF1E293B  /* flat button fill                 */
+#define C_BTN_HOVER   0xFF2A3A4D  /* flat button hover                */
+#define C_BTN_PRESS   0xFF17212C  /* flat button pressed              */
 #define C_ERROR       0xFFD9534F
 #define C_OK          0xFF5CB85C
 #define C_AMBER       0xFFD9A441
@@ -103,8 +104,8 @@ static uint32_t bg_color = C_BG;
 
 /* The procedural desktop backdrops are expensive, so they (plus the desktop
  * icons) are rendered once into a cache and blitted on every redraw. */
-#define BG_CACHE_MAX_W 1024
-#define BG_CACHE_MAX_H 768
+#define BG_CACHE_MAX_W 1280
+#define BG_CACHE_MAX_H 960
 static uint32_t bg_cache[BG_CACHE_MAX_W * BG_CACHE_MAX_H];
 static uint32_t bg_cache_w = 0;
 static uint32_t bg_cache_h = 0;
@@ -759,19 +760,20 @@ static void gui_draw_panel(void) {
 
     graphics_fill_rect(0, py, sw, PANEL_H, C_PANEL);
     graphics_fill_rect(0, py, sw, 1, C_PANEL_LINE);
-    graphics_fill_rect(0, py + 1, sw, 1, 0xFF2E3238);
+    graphics_fill_rect(0, py + 1, sw, 1, 0xFF1F2B39);
+    graphics_fill_rect(0, py + PANEL_H - 1, sw, 1, 0xFF0F1720);
 
     /* logo / launcher button */
     int lx = 4, ly = py + 3, lw = LOGO_W, lh = PANEL_H - 6;
     uint32_t lbg = hover_logo ? (start_menu_open ? C_ACTIVE : C_BTN_HOVER) : C_BTN;
     graphics_fill_rect(lx, ly, lw, lh, lbg);
     graphics_draw_rect(lx, ly, lw, lh, start_menu_open ? C_ACTIVE_DK : C_PANEL_LINE);
-    /* small pixel grid logo */
+    /* small Linux-inspired app launcher mark */
     int gx = lx + lw / 2 - 9, gy = ly + lh / 2 - 5;
     graphics_fill_rect(gx, gy, 4, 4, C_TEXT);
-    graphics_fill_rect(gx + 7, gy, 4, 4, C_TEXT);
-    graphics_fill_rect(gx, gy + 7, 4, 4, C_TEXT);
-    graphics_fill_rect(gx + 7, gy + 7, 4, 4, C_TEXT);
+    graphics_fill_rect(gx + 7, gy, 4, 4, C_ACTIVE);
+    graphics_fill_rect(gx, gy + 7, 4, 4, C_TEXT_DIM);
+    graphics_fill_rect(gx + 7, gy + 7, 4, 4, C_ACTIVE);
 
     /* task buttons */
     gui_build_task_list();
@@ -1549,6 +1551,12 @@ void gui_handle_key(char key) {
     }
     if (key == '\t' && keyboard_is_alt_pressed()) {
         gui_cycle_focus();
+        return;
+    }
+    if (keyboard_is_ctrl_pressed() && keyboard_is_alt_pressed() &&
+        (key == 't' || key == 'T')) {
+        gui_launch_terminal();
+        redraw_pending = true;
         return;
     }
     if (active_window < 0 || active_window >= MAX_WINDOWS) return;

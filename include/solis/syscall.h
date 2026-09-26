@@ -3,6 +3,7 @@
 
 #include <solis/types.h>
 #include <solis/rtc.h>
+#include <solis/dbg.h>
 
 #define SYSCALL_TABLE_ADDR 0x00007E00
 
@@ -62,6 +63,7 @@ struct syscall_table {
     int  (*net_arp_resolve)(const uint8_t *ip, uint8_t *mac);
     int  (*net_dns_resolve)(const char *hostname, uint8_t *ip_out);
     int  (*dbg_read)(char *buf, int max);
+    void (*dbg_get_health)(struct dbg_health *out);
     void (*fill_circle)(uint32_t cx, uint32_t cy, uint32_t r, uint32_t color);
 
     void (*rtc_get_time)(struct rtc_time *out);

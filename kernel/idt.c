@@ -5,6 +5,7 @@
 #include <solis/idt.h>
 #include <solis/console.h>
 #include <solis/interrupts.h>
+#include <solis/dbg.h>
 
 struct idt_entry {
     uint16_t base_low;
@@ -163,6 +164,7 @@ void __attribute__((cdecl)) isr_common_handler(struct registers *regs) {
 
 void __attribute__((cdecl)) irq_common_handler(struct registers *regs) {
     uint8_t irq = regs->int_no - 32;
+    dbg_note_irq(irq);
     if (irq < 16 && irq_handlers[irq]) {
         irq_handlers[irq]();
     }

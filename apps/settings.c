@@ -251,7 +251,7 @@ static void draw_about_tab(int x, int y, int w, int h) {
     py += 12;
     graphics_draw_string(x + w/2 - 52, py, "GUI Framework: SolisGUI", 0xFF666666);
     py += 16;
-    graphics_draw_string(x + w/2 - 48, py, "Graphics: VBE 1024x768", 0xFF666666);
+    graphics_draw_string(x + w/2 - 48, py, "Graphics: VBE 1280x960", 0xFF666666);
     py += 16;
     graphics_draw_string(x + w/2 - 44, py, "Font: 8x16 Bitmap", 0xFF666666);
 }

@@ -3,6 +3,7 @@
 #include <solis/touchpad.h>
 #include <solis/i2c.h>
 #include <solis/timer.h>
+#include <solis/dbg.h>
 
 #define TOUCH_POLL_INTERVAL 3
 
@@ -13,10 +14,13 @@ void pointer_init(void) {
     /* PS/2 mouse first - works on every i8042-equipped machine (incl. QEMU).
      * Then probe for an I2C HID touchpad, which only exists when an SMBus
      * controller is present (modern laptops). */
+    dbg_set_pipeline_stage("init");
     mouse_init();
     i2c_init();
     touchpad_init();
     touchpad_active = touchpad_present();
+    dbg_set_driver_state("pointer", touchpad_active ? DBG_DRIVER_ACTIVE : DBG_DRIVER_ACTIVE);
+    dbg_set_pipeline_stage(touchpad_active ? "i2c" : "ps2");
 }
 
 bool pointer_poll(struct pointer_state *state) {

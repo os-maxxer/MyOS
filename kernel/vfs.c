@@ -169,7 +169,8 @@ int vfs_ls_at(const char *path, char names[][SOLFS_MAX_NAME], int max) {
     char all[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
     int count = solfs_list(all, SOLFS_MAX_FILES);
     int out = 0;
-    int path_len = str_len(path);
+    const char *flat_path = (path[0] == '/') ? path + 1 : path;
+    int flat_path_len = str_len(flat_path);
 
     for (int i = 0; i < count && out < max; i++) {
         bool is_dir_entry = false;
@@ -194,13 +195,13 @@ int vfs_ls_at(const char *path, char names[][SOLFS_MAX_NAME], int max) {
                 str_cpy(names[out], all[i], SOLFS_MAX_NAME);
                 out++;
             }
-        } else if (starts_with(all[i], path) && all[i][path_len] == '/') {
-            const char *rest = all[i] + path_len + 1;
+        } else if (starts_with(all[i], flat_path) && all[i][flat_path_len] == '/') {
+            const char *rest = all[i] + flat_path_len + 1;
             bool sub = false;
             for (int j = 0; rest[j]; j++) {
                 if (rest[j] == '/') { sub = true; break; }
             }
-            if (is_dir_entry && str_eq(all[i], path + 1)) {
+            if (is_dir_entry && str_eq(all[i], flat_path)) {
                 continue;
             }
             if (!sub && rest[0]) {

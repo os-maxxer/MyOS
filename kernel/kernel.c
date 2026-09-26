@@ -17,6 +17,7 @@
 #include <solis/net.h>
 #include <solis/dbg.h>
 #include <solis/rtc.h>
+#include <solis/acpi.h>
 
 extern char _binary_build_spx_terminal_spx_start[];
 extern char _binary_build_spx_terminal_spx_end[];
@@ -69,9 +70,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     ata_init();
     solfs_init();
     vfs_init();
+    rtc_load_settings();
 
     sys_init_ram(multiboot_info);
     sys_init_cpu();
+    acpi_init();
+    dbg_set_memory_metrics(sys_get_total_ram() * 1024, sys_get_total_ram() * 1024);
 
     struct embedded_spx spx_apps[] = {
         {"terminal.spx",

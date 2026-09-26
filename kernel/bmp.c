@@ -5,8 +5,8 @@
 
 #define BMP_MAX_FILE_SIZE (3 * 1024 * 1024)
 
-#define WALLPAPER_MAX_W 1024
-#define WALLPAPER_MAX_H 768
+#define WALLPAPER_MAX_W 1280
+#define WALLPAPER_MAX_H 960
 
 static uint8_t  bmp_file_buf[BMP_MAX_FILE_SIZE];
 static uint32_t wallpaper_cache[WALLPAPER_MAX_W * WALLPAPER_MAX_H];

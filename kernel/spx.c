@@ -162,6 +162,7 @@ void spx_init_syscalls(void) {
     sys_table.net_arp_resolve  = net_arp_resolve;
     sys_table.net_dns_resolve  = net_dns_resolve;
     sys_table.dbg_read         = dbg_read;
+    sys_table.dbg_get_health   = dbg_get_health;
     sys_table.fill_circle      = graphics_fill_circle;
     sys_table.rtc_get_time     = rtc_get_time;
     sys_table.rtc_set_timezone = rtc_set_timezone;
