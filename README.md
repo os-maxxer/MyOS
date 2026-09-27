@@ -5,6 +5,37 @@ Solis is a 32-bit hobby operating system for x86 (i386). It boots with GRUB
 set of built-in applications. It is written in freestanding C with no libc, and
 is primarily developed and run inside QEMU.
 
+## Why the name Solis?
+
+Solis is inspired by the Latin word for "sun." I liked the image of the sun
+shining over Rome: a steady source of light, energy, and possibility. That
+connection is a bit of personal mythology for the project, not a claim that
+Solis is a historical Roman name. For me, it gives the OS a bright, forward-
+looking identity while nodding to the old world.
+
+## Philosophy
+
+Solis is built as a hands-on exploration of how an operating system works,
+from booting and hardware drivers to the desktop and applications. Its goal is
+to be approachable, self-contained, and fun to shape: a place to experiment,
+learn, and make a computing environment feel personal.
+
+Unix and Linux have deep histories, mature ecosystems, and design ideas that
+have influenced operating systems everywhere, including this project. Solis
+isn't trying to replace them or claim to be a better Unix. The difference is
+mostly one of purpose and scale: Solis is a small hobby OS developed as a
+cohesive project, where I can build and understand each layer myself, rather
+than a general-purpose system intended to support the breadth of hardware,
+software, users, and workflows that Linux and Unix-like systems serve.
+
+## About the creator
+
+I'm Luis, the creator of Solis. I've been obsessed with technology since I was
+little, always curious about how computers work and what you can make with
+them. Solis brings that curiosity into one long-running project: building an
+operating system from the ground up, learning by doing, and turning ideas into
+something I can boot, explore, and keep improving.
+
 ## Stability status
 
 Solis is **partially stable**. It boots reliably and the desktop, apps, and
