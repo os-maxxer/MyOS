@@ -15,10 +15,6 @@ static int note_col = 0;
 static char status_msg[40];
 static int status_ticks = 0;
 
-static bool load_panel_open = false;
-static int load_file_count = 0;
-static char load_file_names[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
-
 void notepad_init(void) {
     for (int i = 0; i < NOTE_BUF; i++)
         note_buffer[i] = ' ';
@@ -26,8 +22,6 @@ void notepad_init(void) {
     note_col = 0;
     status_msg[0] = '\0';
     status_ticks = 0;
-    load_panel_open = false;
-    load_file_count = 0;
 }
 
 static void notepad_scroll(void) {
@@ -109,8 +103,8 @@ static void new_note(void) {
     set_status("New note");
 }
 
-static void load_note(const char *name) {
-    int fd = solfs_open(name);
+void notepad_open_file(const char *path) {
+    int fd = vfs_open(path);
     if (fd < 0) { set_status("Can't open file"); return; }
     int sz = solfs_get_size(fd);
     if (sz > NOTE_BUF) sz = NOTE_BUF;
@@ -119,7 +113,7 @@ static void load_note(const char *name) {
         note_buffer[i] = ' ';
 
     uint8_t buf[NOTE_BUF];
-    int read = solfs_read(fd, buf, sz);
+    int read = vfs_read(fd, buf, sz);
 
     int pos = 0;
     int row = 0;
@@ -152,14 +146,9 @@ static void load_note(const char *name) {
     const char *pre3 = "Loaded ";
     while (*pre3) msg[si++] = *pre3++;
     int ni = 0;
-    while (name[ni]) msg[si++] = name[ni++];
+    while (path[ni] && si < (int)sizeof(msg) - 1) msg[si++] = path[ni++];
     msg[si] = '\0';
     set_status(msg);
-    load_panel_open = false;
-}
-
-static void refresh_file_list(void) {
-    load_file_count = solfs_list(load_file_names, SOLFS_MAX_FILES);
 }
 
 void notepad_draw(int x, int y, int w, int h) {
@@ -175,8 +164,7 @@ void notepad_draw(int x, int y, int w, int h) {
     graphics_fill_rect(x + 54, btn_y, 50, btn_h, 0xFF3B8B3B);
     graphics_draw_string(x + 60, btn_y + 4, "Save", 0xFFFFFFFF);
 
-    uint32_t load_btn = load_panel_open ? 0xFF8B5CF6 : 0xFFD4A050;
-    graphics_fill_rect(x + 108, btn_y, 50, btn_h, load_btn);
+    graphics_fill_rect(x + 108, btn_y, 50, btn_h, 0xFFD4A050);
     graphics_draw_string(x + 114, btn_y + 4, "Load", 0xFFFFFFFF);
 
     if (status_ticks > 0 && status_msg[0])
@@ -187,31 +175,7 @@ void notepad_draw(int x, int y, int w, int h) {
     int text_w = w - 4;
     int text_h = h - TOOLBAR_H - 4;
 
-    int list_w = 0;
-    if (load_panel_open) {
-        list_w = 160;
-        if (list_w > text_w / 2) list_w = text_w / 2;
-
-        graphics_fill_rect(text_x + text_w - list_w, text_y, list_w, text_h, 0xFFFFF8F0);
-        graphics_draw_rect(text_x + text_w - list_w, text_y, list_w, text_h, 0xFFCCCCCC);
-        graphics_draw_string(text_x + text_w - list_w + 4, text_y + 2, "Files:", 0xFF444444);
-
-        refresh_file_list();
-
-        int item_h = 18;
-        int list_start = text_y + 18;
-        int visible = (text_h - 22) / item_h;
-        if (visible > load_file_count) visible = load_file_count;
-
-        for (int i = 0; i < visible; i++) {
-            if (i >= load_file_count) break;
-            int iy = list_start + i * item_h;
-            graphics_fill_rect(text_x + text_w - list_w + 2, iy, list_w - 4, item_h - 1, 0xFFFFFFFF);
-            graphics_draw_string(text_x + text_w - list_w + 6, iy + 2, load_file_names[i], 0xFF333333);
-        }
-    }
-
-    int text_area_w = text_w - list_w - (list_w > 0 ? 4 : 0);
+    int text_area_w = text_w;
     graphics_fill_rect(text_x, text_y, text_area_w, text_h, 0xFFFFFFFF);
     graphics_draw_rect(text_x, text_y, text_area_w, text_h, 0xFFCCCCCC);
 
@@ -269,6 +233,7 @@ void notepad_handle_key(char key) {
 }
 
 void notepad_handle_mouse(int win_x, int win_y, int win_w, int win_h, int mouse_x, int mouse_y) {
+    (void)win_w; (void)win_h;
     int rel_x = mouse_x - win_x;
     int rel_y = mouse_y - win_y;
 
@@ -276,31 +241,10 @@ void notepad_handle_mouse(int win_x, int win_y, int win_w, int win_h, int mouse_
         if (rel_x >= 4 && rel_x < 50) { new_note(); return; }
         if (rel_x >= 54 && rel_x < 104) { save_note(); return; }
         if (rel_x >= 108 && rel_x < 158) {
-            load_panel_open = !load_panel_open;
-            if (load_panel_open) refresh_file_list();
+            char path[64];
+            if (gui_open_dialog(path, sizeof(path))) notepad_open_file(path);
+            else set_status("Load cancelled");
             return;
-        }
-    }
-
-    if (load_panel_open) {
-        int text_x = 2;
-        int text_y = TOOLBAR_H + 2;
-        int text_w = win_w - 4;
-        int text_h = win_h - TOOLBAR_H - 4;
-        int list_w = 160;
-        if (list_w > text_w / 2) list_w = text_w / 2;
-
-        int list_area_x = text_x + text_w - list_w;
-        int list_start_y = text_y + 18;
-        int item_h = 18;
-        int visible = (text_h - 22) / item_h;
-
-        if (rel_x >= list_area_x && rel_x < list_area_x + list_w &&
-            rel_y >= list_start_y && rel_y < list_start_y + visible * item_h) {
-            int idx = (rel_y - list_start_y) / item_h;
-            if (idx >= 0 && idx < load_file_count) {
-                load_note(load_file_names[idx]);
-            }
         }
     }
 }

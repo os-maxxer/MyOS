@@ -39,22 +39,11 @@ static const char scancode_ascii_shift[128] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-static void keyboard_handler(void) {
-    uint8_t status = inb(KEYBOARD_STATUS_PORT);
-    if (!(status & 0x01)) {
-        pic_send_eoi(1);
-        return;
-    }
-
-    uint8_t scancode = inb(KEYBOARD_DATA_PORT);
-
-    console_write("[KBD] ");
-    console_write_hex(scancode);
-    console_write("\n");
-
+/* Decode one keyboard scancode. Shared by the IRQ path and the polling
+ * drain so both behave identically. */
+static void keyboard_process(uint8_t scancode) {
     if (scancode == 0xE0) {
         extended = true;
-        pic_send_eoi(1);
         return;
     }
 
@@ -63,7 +52,6 @@ static void keyboard_handler(void) {
         if (scancode == 0x5B && !(scancode & 0x80)) {
             start_menu_pressed = true;
         }
-        pic_send_eoi(1);
         return;
     }
 
@@ -72,42 +60,34 @@ static void keyboard_handler(void) {
 
     if (scancode == 0x2A || scancode == 0x36) {
         shift_pressed = !released;
-        pic_send_eoi(1);
         return;
     }
     if (scancode == 0x1D) {
         ctrl_pressed = !released;
-        pic_send_eoi(1);
         return;
     }
     if (scancode == 0x38) {
         alt_pressed = !released;
-        pic_send_eoi(1);
         return;
     }
     if (scancode == 0x3A && !released) {
         caps_lock = !caps_lock;
-        pic_send_eoi(1);
         return;
     }
     if (scancode >= 0x3B && scancode <= 0x44) {
         if (!released) func_key_pressed = scancode - 0x3B + 1;
-        pic_send_eoi(1);
         return;
     }
     if (scancode == 0x57) {
         if (!released) func_key_pressed = 11;
-        pic_send_eoi(1);
         return;
     }
     if (scancode == 0x58) {
         if (!released) func_key_pressed = 12;
-        pic_send_eoi(1);
         return;
     }
 
     if (released) {
-        pic_send_eoi(1);
         return;
     }
 
@@ -128,7 +108,21 @@ static void keyboard_handler(void) {
             key_head = next;
         }
     }
+}
 
+static void keyboard_handler(void) {
+    /* The keyboard and the mouse share port 0x60. Only consume bytes that
+     * are actually ours: the AUX bit in the status byte marks mouse data,
+     * and IRQ12 owns it. Without this check the two drivers steal each
+     * other's bytes, so a mouse packet header (0x08) decodes as the scancode
+     * for '3' and the mouse state machine is fed scancodes, which
+     * permanently desyncs the pointer. */
+    for (int guard = 0; guard < 32; guard++) {
+        uint8_t status = inb(KEYBOARD_STATUS_PORT);
+        if (!(status & 0x01)) break;          /* output buffer empty */
+        if (status & 0x20) break;             /* AUX byte: leave it for IRQ12 */
+        keyboard_process(inb(KEYBOARD_DATA_PORT));
+    }
     pic_send_eoi(1);
 }
 

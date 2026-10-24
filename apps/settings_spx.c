@@ -7,4 +7,5 @@ const struct app_exports __attribute__((section(".spx_exports"), used)) spx_app 
     .draw = settings_draw,
     .handle_key = settings_handle_key,
     .handle_mouse = settings_handle_mouse,
+    .handle_scroll = settings_handle_scroll,
 };

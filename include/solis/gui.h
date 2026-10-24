@@ -9,7 +9,12 @@
 #define GUI_THEME_SUNSET    2
 #define GUI_THEME_CHERRY_BLOSSOM 3
 #define GUI_THEME_GNOME     4
+<<<<<<< HEAD
 #define GUI_THEME_VOXEL     5
+=======
+#define GUI_THEME_BORED     5
+#define GUI_THEME_AURORA    6
+>>>>>>> 230b55be0f5324b7ee7c5a29d3a4dbd94d2e5c34
 
 struct gui_point { int32_t x; int32_t y; };
 struct gui_rect { int32_t x; int32_t y; int32_t width; int32_t height; };
@@ -17,6 +22,7 @@ struct gui_rect { int32_t x; int32_t y; int32_t width; int32_t height; };
 void gui_init(void);
 void gui_redraw(void);
 void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons);
+void gui_handle_scroll(int notches);
 void gui_handle_key(char key);
 bool gui_needs_redraw(void);
 void gui_update_clock(void);
@@ -39,5 +45,7 @@ int  gui_launch_app(int slot);
  * pick a directory and type a filename. On save returns 1 and fills out_path
  * with a full VFS path ("/home/foo.txt"); returns 0 on cancel. */
 int  gui_save_dialog(const char *suggested, char *out_path, int out_max);
+int  gui_open_dialog(char *out_path, int out_max);
+int  gui_open_with(int slot, const char *path);
 
 #endif
