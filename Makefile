@@ -1,4 +1,9 @@
-CC ?= gcc
+# GNU Make provides a built-in CC=cc, so ?= would leave the unavailable
+# `cc` default in place on MSYS2. Keep explicit environment/command-line
+# overrides, but use gcc for the project default.
+ifeq ($(origin CC), default)
+CC := gcc
+endif
 CFLAGS ?= -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables -mno-sse -mno-sse2 -mno-mmx -mno-80387 -Wall -Wextra -Werror -O2 -Iinclude
 AS := gcc
 ASFLAGS := -m32 -c -x assembler-with-cpp
@@ -40,6 +45,7 @@ OBJS := \
 	$(BUILD_DIR)/kernel/pci.o \
 	$(BUILD_DIR)/kernel/rtl8139.o \
 	$(BUILD_DIR)/kernel/net.o \
+	$(BUILD_DIR)/kernel/acpi.o \
 	$(BUILD_DIR)/kernel/dbg.o \
 	$(BUILD_DIR)/kernel/spx.o \
 	$(BUILD_DIR)/kernel/bmp.o \
@@ -144,6 +150,9 @@ $(BUILD_DIR)/kernel/rtl8139.o: $(KERNEL_DIR)/rtl8139.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/net.o: $(KERNEL_DIR)/net.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/acpi.o: $(KERNEL_DIR)/acpi.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/gui/gui.o: $(GUI_DIR)/gui.c | $(BUILD_DIR)

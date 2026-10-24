@@ -20,6 +20,7 @@ struct rtc_time {
     int tz_index;
 };
 void rtc_init(void);
+void rtc_load_settings(void);
 void rtc_get_time(struct rtc_time *out);
 void rtc_set_timezone(int index);
 int  rtc_get_timezone(void);

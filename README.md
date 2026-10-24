@@ -37,7 +37,7 @@ can be launched from the desktop icons, the bottom dock, or the Apps grid
 
 | App          | What it does                                                        |
 |--------------|---------------------------------------------------------------------|
-| **Terminal** | Interactive shell with a small set of built-in commands             |
+| **Terminal** | Interactive shell with filesystem commands plus Lua and C source runners |
 | **Notepad**  | Plain-text editor with save/load                                    |
 | **Paint**    | Pixel drawing canvas with a palette and brush tools                 |
 | **Settings** | Theme/wallpaper, background color, and timezone configuration        |
@@ -55,6 +55,8 @@ can be launched from the desktop icons, the bottom dock, or the Apps grid
   right) with hover and press feedback; windows cast a soft drop shadow.
 - The **top bar** shows the launcher, open window names, and a live clock.
 - The **Settings** app changes the theme and background in real time.
+- **Settings > Time & Date** changes the clock timezone and saves it for the next boot.
+- The Terminal supports `lua file.lua`, `cc file.c`, and `run file.lua` or `run file.c`.
 
 ## Minimum system requirements
 
@@ -87,6 +89,29 @@ sudo dnf install -y \
 
 Other distros: `gcc-multilib` + `qemu-system-i386` + `grub-pc-bin` +
 `xorriso` + `mtools` (Debian/Ubuntu) or the equivalent `-m32` capable toolchain.
+
+### Windows
+
+The kernel must be linked as ELF i386 (`ld -m elf_i386`). MSYS2 UCRT64 and
+MinGW GCC produce Windows PE/COFF objects, so they can compile individual
+files but cannot link this kernel. Use WSL for the complete build:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Inside Ubuntu/WSL:
+
+```sh
+sudo apt update
+sudo apt install build-essential gcc-multilib binutils grub-pc-bin \
+  xorriso mtools qemu-system-x86 python3
+cd /mnt/d/MyOS
+make
+```
+
+An `i686-elf-gcc` cross-toolchain is also suitable. MSYS2 may still be used
+for editing, but its UCRT64 linker is not suitable for the kernel link step.
 
 ## Building
 

@@ -157,6 +157,10 @@ int dbg_read(char *buf, int max) {
     return SYS->dbg_read(buf, max);
 }
 
+void dbg_get_health(struct dbg_health *out) {
+    SYS->dbg_get_health(out);
+}
+
 void graphics_fill_circle(int cx, int cy, int r, uint32_t color) {
     SYS->fill_circle(cx, cy, r, color);
 }
