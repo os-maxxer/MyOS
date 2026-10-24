@@ -59,6 +59,7 @@ enum spx_app_id {
     SPX_PKG         = 6,
     SPX_EDITOR      = 7,
     SPX_TETRIS      = 8,
+    SPX_BLOCKS      = 9,
 };
 
 #endif

@@ -7,6 +7,21 @@ static const struct syscall_table *SYS = (const struct syscall_table *)SYSCALL_T
 void graphics_fill_rect(int x, int y, int w, int h, uint32_t color) {
     SYS->fill_rect(x, y, w, h, color);
 }
+void graphics_fill_gradient_v(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                              uint32_t top, uint32_t bottom) {
+    if (h == 0) return;
+    uint32_t steps = h > 1 ? h - 1 : 1;
+    int top_r = (top >> 16) & 0xFF, top_g = (top >> 8) & 0xFF, top_b = top & 0xFF;
+    int bot_r = (bottom >> 16) & 0xFF, bot_g = (bottom >> 8) & 0xFF, bot_b = bottom & 0xFF;
+    for (uint32_t row = 0; row < h; row++) {
+        int r = top_r + (bot_r - top_r) * (int)row / (int)steps;
+        int g = top_g + (bot_g - top_g) * (int)row / (int)steps;
+        int b = top_b + (bot_b - top_b) * (int)row / (int)steps;
+        uint32_t color = 0xFF000000 | ((uint32_t)r << 16) |
+                         ((uint32_t)g << 8) | (uint32_t)b;
+        SYS->fill_rect(x, y + row, w, 1, color);
+    }
+}
 void graphics_draw_rect(int x, int y, int w, int h, uint32_t color) {
     SYS->draw_rect(x, y, w, h, color);
 }

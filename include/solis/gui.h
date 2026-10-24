@@ -9,6 +9,7 @@
 #define GUI_THEME_SUNSET    2
 #define GUI_THEME_CHERRY_BLOSSOM 3
 #define GUI_THEME_GNOME     4
+#define GUI_THEME_VOXEL     5
 
 struct gui_point { int32_t x; int32_t y; };
 struct gui_rect { int32_t x; int32_t y; int32_t width; int32_t height; };
@@ -31,6 +32,7 @@ int  gui_launch_taskmanager(void);
 int  gui_launch_pkg(void);
 int  gui_launch_editor(void);
 int  gui_launch_tetris(void);
+int  gui_launch_blocks(void);
 int  gui_launch_app(int slot);
 
 /* Blocking modal save dialog. Opens centered over the desktop, lets the user

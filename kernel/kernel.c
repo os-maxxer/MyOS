@@ -37,6 +37,8 @@ extern char _binary_build_spx_editor_spx_start[];
 extern char _binary_build_spx_editor_spx_end[];
 extern char _binary_build_spx_tetris_spx_start[];
 extern char _binary_build_spx_tetris_spx_end[];
+extern char _binary_build_spx_blocks_spx_start[];
+extern char _binary_build_spx_blocks_spx_end[];
 
 void __attribute__((noreturn)) kernel_panic(const char *message) {
     console_clear();
@@ -105,8 +107,11 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
         {"tetris.spx",
          (const uint8_t *)_binary_build_spx_tetris_spx_start,
          (uint32_t)(_binary_build_spx_tetris_spx_end - _binary_build_spx_tetris_spx_start)},
+           {"blocks.spx",
+            (const uint8_t *)_binary_build_spx_blocks_spx_start,
+            (uint32_t)(_binary_build_spx_blocks_spx_end - _binary_build_spx_blocks_spx_start)},
     };
-    spx_init(spx_apps, 9);
+        spx_init(spx_apps, 10);
 
     keyboard_init();
     pointer_init();

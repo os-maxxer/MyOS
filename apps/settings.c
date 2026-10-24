@@ -97,6 +97,19 @@ static void draw_preview_gnome(int x, int y, int w, int h) {
     graphics_draw_string(x + w/2 - 14, y + h - 14, "Solis Dark", 0xFFDDDDDD);
 }
 
+static void draw_preview_voxel(int x, int y, int w, int h) {
+    int horizon = h * 3 / 5;
+    graphics_fill_gradient_v(x, y, w, horizon, 0xFF626FA8, 0xFF9A83B2);
+    graphics_fill_rect(x, y + horizon, w, h - horizon, 0xFF393953);
+    int hill = x + w / 3;
+    graphics_fill_rect(hill, y + horizon - 12, w / 3, h - horizon + 12, 0xFF5B5B83);
+    graphics_fill_rect(hill + w / 12, y + horizon - 22, w / 6, 10, 0xFF5B5B83);
+    graphics_fill_rect(hill + w / 12, y + horizon - 22, w / 6, 3, 0xFF8BCB8D);
+    graphics_fill_rect(x + w / 2 - 2, y + h / 2 - 8, 4, 18, 0xFFEAE0EE);
+    graphics_fill_rect(x + w / 2 - 6, y + h / 2 - 3, 12, 4, 0xFFEAE0EE);
+    graphics_draw_string(x + w/2 - 20, y + h - 14, "Voxel S", 0xFFDDDDDD);
+}
+
 static void draw_preview_solid(int x, int y, int w, int h) {
     graphics_fill_rect(x, y, w, h, 0xFF2C2F33);
     int wx = x + w/2 - 26, wy = y + h/2 - 12;
@@ -119,8 +132,9 @@ static void draw_appearance_tab(int x, int y, int w, int h) {
         {GUI_THEME_SUNSET, draw_preview_sunset},
         {GUI_THEME_CHERRY_BLOSSOM, draw_preview_cherry},
         {GUI_THEME_STARFIELD, draw_preview_starfield},
+        {GUI_THEME_VOXEL, draw_preview_voxel},
     };
-    int nthemes = 5;
+    int nthemes = 6;
     int tw = (w - 40) / nthemes;
     if (tw > 130) tw = 130;
     int th = tw * 3 / 4;
@@ -420,8 +434,8 @@ void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y)
 
     if (settings_tab == 0) {
         int py = y + 30 + 12 + 24;
-        struct { int id; } themes[] = {{GUI_THEME_SOLID}, {GUI_THEME_GNOME}, {GUI_THEME_SUNSET}, {GUI_THEME_CHERRY_BLOSSOM}, {GUI_THEME_STARFIELD}};
-        int nthemes = 5;
+        struct { int id; } themes[] = {{GUI_THEME_SOLID}, {GUI_THEME_GNOME}, {GUI_THEME_SUNSET}, {GUI_THEME_CHERRY_BLOSSOM}, {GUI_THEME_STARFIELD}, {GUI_THEME_VOXEL}};
+        int nthemes = 6;
         int tw = ((w - SIDEBAR_W - 1) - 40) / nthemes;
         if (tw > 130) tw = 130;
         int th = tw * 3 / 4;

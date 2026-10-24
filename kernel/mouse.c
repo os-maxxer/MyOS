@@ -34,8 +34,8 @@ static void mouse_handler(void) {
             {
                 int32_t dx = (int32_t)(int8_t)mouse_byte[1];
                 int32_t dy = -(int32_t)(int8_t)mouse_byte[2];
-                if (mouse_byte[0] & 0x40) dy = (mouse_byte[0] & 0x80) ? -127 : 127;
-                if (mouse_byte[0] & 0x20) dx = (mouse_byte[0] & 0x10) ? -127 : 127;
+                if (mouse_byte[0] & 0x40) dx = 0;
+                if (mouse_byte[0] & 0x80) dy = 0;
                 if (dx || dy) {
                     mouse_dx += dx;
                     mouse_dy += dy;
@@ -97,7 +97,7 @@ void mouse_init(void) {
 
     mouse_write(0xE8);
     mouse_read();
-    mouse_write(0x01);
+    mouse_write(0x02);
     mouse_read();
 
     mouse_write(0xF4);
@@ -123,8 +123,6 @@ void mouse_get_state(struct mouse_state *state) {
     if (state != 0) {
         int32_t dx = mouse_dx;
         int32_t dy = mouse_dy;
-        dx = (dx > 0) ? (dx / 2 + 1) : (dx / 2);
-        dy = (dy > 0) ? (dy / 2 + 1) : (dy / 2);
         state->dx = dx;
         state->dy = dy;
         state->buttons = mouse_buttons;

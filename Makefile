@@ -64,7 +64,8 @@ SPX_EMBED_OBJS := \
 	$(SPX_DIR)/taskmanager_spx_embed.o \
 	$(SPX_DIR)/pkg_spx_embed.o \
 	$(SPX_DIR)/editor_spx_embed.o \
-	$(SPX_DIR)/tetris_spx_embed.o
+	$(SPX_DIR)/tetris_spx_embed.o \
+	$(SPX_DIR)/blocks_spx_embed.o
 
 all: $(BUILD_DIR)/solis.iso pkg-spx
 
@@ -371,6 +372,28 @@ $(SPX_DIR)/tetris.spx: $(SPX_DIR)/tetris.bin tools/mkspx.py
 $(SPX_DIR)/tetris_spx_embed.o: $(SPX_DIR)/tetris.spx
 	$(OBJCOPY) -I binary -O elf32-i386 -B i386 --rename-section .data=.spx_apps $< $@
 
+# --- Solis Blocks ---
+$(SPX_DIR)/blocks.o: $(APPS_DIR)/blocks.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/glue_blocks.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/blocks_spx_stub.o: $(APPS_DIR)/blocks_spx.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/blocks.elf: $(SPX_DIR)/blocks.o $(SPX_DIR)/glue_blocks.o $(SPX_DIR)/blocks_spx_stub.o
+	$(LD) -m elf_i386 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02200000 -o $@ $^
+
+$(SPX_DIR)/blocks.bin: $(SPX_DIR)/blocks.elf
+	$(OBJCOPY) -O binary $< $@
+
+$(SPX_DIR)/blocks.spx: $(SPX_DIR)/blocks.bin tools/mkspx.py
+	python3 tools/mkspx.py $< Blocks $@
+
+$(SPX_DIR)/blocks_spx_embed.o: $(SPX_DIR)/blocks.spx
+	$(OBJCOPY) -I binary -O elf32-i386 -B i386 --rename-section .data=.spx_apps $< $@
+
 # Copy .spx files to pkg/ repo directories
 $(PKG_DIR)/taskmanager/taskmanager.spx: $(SPX_DIR)/taskmanager.spx
 	cp $< $@
@@ -379,6 +402,24 @@ $(PKG_DIR)/solpkg/solpkg.spx: $(SPX_DIR)/pkg.spx
 	cp $< $@
 
 pkg-spx: $(PKG_DIR)/taskmanager/taskmanager.spx $(PKG_DIR)/solpkg/solpkg.spx
+
+# Install the host packages needed to build and run Solis.
+get:
+	@printf 'What distro are you on? '; \
+	read distro; \
+	distro=$$(printf '%s' "$$distro" | tr '[:upper:]' '[:lower:]'); \
+	case "$$distro" in \
+		debian|ubuntu|linux\ mint|linuxmint|pop\ os|pop_os) \
+			sudo apt-get update && sudo apt-get install -y build-essential gcc-multilib binutils grub-pc-bin xorriso mtools qemu-system-x86 python3 ;; \
+		fedora) \
+			sudo dnf install -y gcc glibc-devel.i686 libgcc.i686 make binutils grub2-tools xorriso mtools qemu-system-x86 python3 ;; \
+		arch|arch\ linux|manjaro|endeavouros) \
+			sudo pacman -S --needed --noconfirm base-devel lib32-glibc binutils grub xorriso mtools qemu-system-x86 python ;; \
+		opensuse|opensuse\ leap|opensuse\ tumbleweed) \
+			sudo zypper install -y gcc gcc-32bit glibc-devel-32bit make binutils grub2-tools xorriso mtools qemu-x86 python3 ;; \
+		*) \
+			printf "Unsupported distro: %s\\nSupported: Debian/Ubuntu, Fedora, Arch, openSUSE.\\n" "$$distro"; exit 1 ;; \
+	esac
 
 # Kernel link
 $(BUILD_DIR)/solis.kernel: $(OBJS) $(SPX_EMBED_OBJS)
@@ -431,4 +472,4 @@ run-dbg: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all run run-x11 run-sdl run-serial run-x11-serial run-sdl-serial run-nographic run-dbg clean vbox-disk
+.PHONY: all get run run-x11 run-sdl run-serial run-x11-serial run-sdl-serial run-nographic run-dbg clean vbox-disk

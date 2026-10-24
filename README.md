@@ -19,9 +19,9 @@ tested to its full extent**:
 ## Features
 
 - **Boot**: GRUB 2 / Multiboot2, 1024x768x32 VBE framebuffer
-- **GUI**: Desktop, window manager, top bar with a live clock, dock, and app grid
-- **Themes**: Gnome, Sunset, Cherry Blossom, Starfield, and solid colors
-- **Apps**: Terminal, Notepad, Paint, Settings, Files, Task Manager, SOLPKG, Editor, Tetris
+- **GUI**: Desktop, window manager, live clock, centered dock, and app launcher
+- **Themes**: Voxel Dusk, Gnome, Sunset, Cherry Blossom, Starfield, and solid colors
+- **Apps**: Terminal, Notepad, Paint, Settings, Files, Task Manager, SOLPKG, Editor, Tetris, Solis Blocks
 - **Filesystem**: SOLFS on an ATA (IDE) disk, plus a small VFS
 - **Networking**: RTL8139 driver with ARP, ping, DNS, and HTTP client support
 - **Input**: PS/2 keyboard + mouse, and an I2C touchpad driver
@@ -30,10 +30,9 @@ tested to its full extent**:
 
 ## Applications
 
-Solis ships with nine built-in apps. They are compiled as freestanding
+Solis ships with ten built-in apps. They are compiled as freestanding
 binaries, wrapped in the SPX package format, and embedded in the kernel. They
-can be launched from the desktop icons, the bottom dock, or the Apps grid
-(launcher button on the left of the top bar):
+can be launched from pinned icons in the bottom dock or the app launcher:
 
 | App          | What it does                                                        |
 |--------------|---------------------------------------------------------------------|
@@ -46,6 +45,7 @@ can be launched from the desktop icons, the bottom dock, or the Apps grid
 | **SOLPKG**   | Package manager for the SOLPKG repo                                  |
 | **Editor**   | Source code editor with C syntax highlighting (Ctrl+S save, Ctrl+N new) |
 | **Tetris**   | Classic falling-blocks game                                          |
+| **Solis Blocks** | First-person 3D voxel sandbox with mining and block building        |
 
 ## Using the desktop
 
@@ -90,6 +90,11 @@ sudo dnf install -y \
 Other distros: `gcc-multilib` + `qemu-system-i386` + `grub-pc-bin` +
 `xorriso` + `mtools` (Debian/Ubuntu) or the equivalent `-m32` capable toolchain.
 
+On Debian/Ubuntu, Fedora, Arch, or openSUSE, run `make get` from a Linux
+terminal to install the build and run dependencies. The prompt is
+case-insensitive. On Windows, first use WSL and run the command inside the
+Linux distribution.
+
 ### Windows
 
 The kernel must be linked as ELF i386 (`ld -m elf_i386`). MSYS2 UCRT64 and
@@ -121,7 +126,7 @@ make build/disk.img  # also build the SOLFS disk image (built automatically by m
 make clean      # removes build artifacts
 ```
 
-The kernel and every application are compiled into a single ISO, and the nine
+The kernel and every application are compiled into a single ISO, and the ten
 built-in apps are embedded in the kernel as SPX packages.
 
 ## Running
