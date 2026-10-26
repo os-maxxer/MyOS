@@ -11,11 +11,11 @@
 #define APIC_TIMER_DIV    0x3E0
 
 static inline uint32_t apic_read(uint32_t off) {
-    return *(volatile uint32_t *)(APIC_BASE + off);
+    return *(volatile uint32_t *)(uintptr_t)(APIC_BASE + off);
 }
 
 static inline void apic_write(uint32_t off, uint32_t val) {
-    *(volatile uint32_t *)(APIC_BASE + off) = val;
+    *(volatile uint32_t *)(uintptr_t)(APIC_BASE + off) = val;
 }
 
 void apic_init(void) {

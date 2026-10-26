@@ -37,6 +37,11 @@ struct acpi_rsdt {
     uint32_t entries[];
 } __attribute__((packed));
 
+struct acpi_xsdt {
+    struct acpi_sdt_header header;
+    uint64_t entries[];
+} __attribute__((packed));
+
 struct acpi_touchpad_hints {
     bool found;
     bool has_hid;
@@ -101,8 +106,9 @@ struct acpi_facp {
 } __attribute__((packed));
 
 bool acpi_init(void);
-uint32_t acpi_get_rsdt_address(void);
-uint32_t acpi_get_dsdt_address(void);
+uint64_t acpi_get_rsdt_address(void);
+uint64_t acpi_get_xsdt_address(void);
+uint64_t acpi_get_dsdt_address(void);
 bool acpi_is_available(void);
 bool acpi_scan_touchpad_hints(struct acpi_touchpad_hints *out);
 

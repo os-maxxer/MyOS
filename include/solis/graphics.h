@@ -17,7 +17,7 @@ struct framebuffer_info {
     uint8_t blue_field_position;
 };
 
-void graphics_init(uint32_t multiboot_info);
+void graphics_init(uintptr_t multiboot_info);
 bool graphics_is_ready(void);
 void graphics_clear(uint32_t color);
 void graphics_put_pixel(uint32_t x, uint32_t y, uint32_t color);

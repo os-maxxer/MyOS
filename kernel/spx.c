@@ -44,7 +44,7 @@ static void do_cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint3
     __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf));
 }
 
-void sys_init_ram(uint32_t multiboot_info) {
+void sys_init_ram(uintptr_t multiboot_info) {
     uint32_t *info = (uint32_t *)multiboot_info;
     if (!info) { total_ram_mb = 256; return; }
     uint32_t total_size = info[0];
@@ -204,7 +204,7 @@ void spx_init(struct embedded_spx *apps, int count) {
             continue;
         }
 
-        uint8_t *load_addr = (uint8_t *)(SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)i);
+        uint8_t *load_addr = (uint8_t *)(uintptr_t)(SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)i);
         uint32_t code_size = hdr->code_size;
         uint32_t bss_size  = hdr->bss_size;
         uint32_t hdr_size  = sizeof(struct spx_header);
@@ -266,7 +266,7 @@ static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
     const struct spx_header *hdr = (const struct spx_header *)data;
     if (hdr->magic != SPX_MAGIC || hdr->version != SPX_VERSION) return -1;
 
-    uint8_t *load_addr = (uint8_t *)(SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)slot);
+    uint8_t *load_addr = (uint8_t *)(uintptr_t)(SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)slot);
     uint32_t code_size = hdr->code_size;
     uint32_t bss_size  = hdr->bss_size;
     uint32_t hdr_size  = sizeof(struct spx_header);

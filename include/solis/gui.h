@@ -9,12 +9,9 @@
 #define GUI_THEME_SUNSET    2
 #define GUI_THEME_CHERRY_BLOSSOM 3
 #define GUI_THEME_GNOME     4
-<<<<<<< HEAD
 #define GUI_THEME_VOXEL     5
-=======
-#define GUI_THEME_BORED     5
-#define GUI_THEME_AURORA    6
->>>>>>> 230b55be0f5324b7ee7c5a29d3a4dbd94d2e5c34
+#define GUI_THEME_BORED     6
+#define GUI_THEME_AURORA    7
 
 struct gui_point { int32_t x; int32_t y; };
 struct gui_rect { int32_t x; int32_t y; int32_t width; int32_t height; };

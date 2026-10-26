@@ -49,7 +49,7 @@ int  spx_uninstall(const char *name);
 int  spx_find_slot(const char *name);
 int  spx_list_installed(char names[][SPX_NAME_LEN], int max);
 
-void sys_init_ram(uint32_t multiboot_info);
+void sys_init_ram(uintptr_t multiboot_info);
 void sys_init_cpu(void);
 uint32_t sys_get_total_ram(void);
 void sys_get_cpu_brand(char *buf, int max_len);

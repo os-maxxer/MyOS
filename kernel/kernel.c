@@ -19,6 +19,8 @@
 #include <solis/dbg.h>
 #include <solis/rtc.h>
 #include <solis/acpi.h>
+#include <solis/pmm.h>
+#include <solis/vmm.h>
 
 extern char _binary_build_spx_terminal_spx_start[];
 extern char _binary_build_spx_terminal_spx_end[];
@@ -42,7 +44,6 @@ extern char _binary_build_spx_blocks_spx_start[];
 extern char _binary_build_spx_blocks_spx_end[];
 
 void __attribute__((noreturn)) kernel_panic(const char *message) {
-    console_clear();
     console_set_color(0x0F, 0x04);
     console_write("SOLIS: kernel panic\n");
     console_write(message);
@@ -52,11 +53,21 @@ void __attribute__((noreturn)) kernel_panic(const char *message) {
     }
 }
 
-void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
-    (void)multiboot_magic;
-
+void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
     console_init();
+    if (multiboot_magic != 0x36D76289) {
+        kernel_panic("Invalid Multiboot2 boot magic");
+    }
+
     dbg_init();
+
+    if (!pmm_init(multiboot_info))
+        kernel_panic("Physical memory map initialization failed");
+    if (!vmm_init())
+        kernel_panic("Virtual memory initialization failed");
+    console_write("[MEM] 4 KiB allocator and kernel page protections ready; free=");
+    console_write_dec((uint32_t)(pmm_free_bytes() / (1024 * 1024)));
+    console_write(" MiB\n");
 
     gdt_init();
     idt_init();

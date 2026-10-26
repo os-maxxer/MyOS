@@ -1,4 +1,6 @@
 #include <solis/apps/terminal.h>
+#include <solis/apps/cinterp.h>
+#include <solis/dbg.h>
 #include <solis/graphics.h>
 #include <solis/vfs.h>
 #include <solis/timer.h>
@@ -20,6 +22,10 @@ extern void dbg_get_health(struct dbg_health *out);
 
 #define TERM_COL_TEXT   0xEAEAEA
 #define TERM_COL_ACCENT 0xD9A441
+#define TERM_COL_BG     0xFF121820
+#define TERM_COL_OK     0xFF5CB85C
+#define TERM_COL_MUTED  0xFF888888
+#define TERM_SOURCE_MAX 16384
 
 #define TERM_ATTR_NORMAL 0
 #define TERM_ATTR_PROMPT 1
@@ -34,6 +40,7 @@ static int term_col = 0;
 
 static char line_buf[LINE_BUF];
 static int line_pos = 0;
+static char source_buffer[TERM_SOURCE_MAX + 1];
 
 static int str_eq(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
@@ -117,39 +124,66 @@ static void int_to_str(int n, char *buf) {
     buf[bi] = '\0';
 }
 
-static void u32_to_str(uint32_t value, char *buf) {
-    char digits[12];
-    int count = 0;
-    if (value == 0) digits[count++] = '0';
-    while (value > 0) { digits[count++] = '0' + value % 10; value /= 10; }
-    int i = 0;
-    while (count > 0) buf[i++] = digits[--count];
-    buf[i] = '\0';
-}
-
-static void term_print_u32(uint32_t value) {
-    char buf[12];
-    u32_to_str(value, buf);
-    term_print(buf);
-}
-
-static void term_print_hex64(uint64_t value) {
-    const char *hex = "0123456789ABCDEF";
-    char buf[17];
-    for (int i = 15; i >= 0; i--) {
-        buf[i] = hex[value & 0x0F];
-        value >>= 4;
-    }
-    buf[16] = '\0';
-    term_print(buf);
-}
-
 static void shell_prompt(void) {
     term_fg = TERM_ATTR_PROMPT;
     term_print("user@SOLIS ");
     term_print(vfs_get_cwd());
     term_print("$ ");
     term_fg = TERM_ATTR_NORMAL;
+}
+
+static int lang_has_suffix(const char *path, const char *suffix) {
+    int path_len = str_len(path);
+    int suffix_len = str_len(suffix);
+    if (path_len < suffix_len) return 0;
+    path += path_len - suffix_len;
+    return str_eq(path, suffix);
+}
+
+static int read_source_file(const char *path) {
+    int fd = vfs_open(path);
+    if (fd < 0) {
+        term_println("source: unable to open file");
+        return -1;
+    }
+
+    int size = vfs_get_size(fd);
+    if (size < 0 || size > TERM_SOURCE_MAX) {
+        term_println("source: file is too large");
+        return -1;
+    }
+
+    int bytes_read = vfs_read(fd, (uint8_t *)source_buffer, (uint32_t)size);
+    if (bytes_read < 0 || bytes_read > size) {
+        term_println("source: unable to read file");
+        return -1;
+    }
+    source_buffer[bytes_read] = '\0';
+    return 0;
+}
+
+static void shell_compile_c(const char *path) {
+    if (read_source_file(path) < 0) return;
+    if (ci_check(source_buffer) < 0) {
+        term_print("C error: ");
+        term_println(ci_last_error() ? ci_last_error() : "invalid source");
+        return;
+    }
+    term_println("C source is valid.");
+}
+
+static void shell_run_source(const char *language, const char *path) {
+    if (!str_eq(language, "c")) {
+        term_println("Lua source execution is not available.");
+        return;
+    }
+    if (read_source_file(path) < 0) return;
+
+    ci_set_putchar(term_putchar);
+    if (ci_run(source_buffer) < 0) {
+        term_print("C error: ");
+        term_println(ci_last_error() ? ci_last_error() : "execution failed");
+    }
 }
 
 static void shell_execute(const char *cmd) {
@@ -178,9 +212,9 @@ static void shell_execute(const char *cmd) {
         term_println("  rm <file>      - delete a file");
         term_println("  write <f> <t>  - write text to file");
         term_println("  touch <file>   - create empty file");
-        term_println("  lua <file>     - run Lua print/expressions");
+        term_println("  lua <file>     - Lua source runner (unavailable)");
         term_println("  cc <file.c>    - compile-check C source");
-        term_println("  run <file>     - run Lua or C source");
+        term_println("  run <file.c>   - run C source");
         term_println("  cp <src> <dst> - copy a file");
         term_println("  mv <src> <dst> - rename/move a file");
         term_println("  hexdump <file> - hex view of a file");
@@ -755,10 +789,12 @@ void term_init(void) {
 }
 
 void term_draw(int x, int y, int w, int h) {
-    (void)w;
-    (void)h;
-    int cols = (w - 4) / 8;
-    int rows = (h - 4) / 16;
+    int content_x = x + 2;
+    int content_y = y + 2;
+    int content_w = w - 4;
+    int content_h = h - 4;
+    int cols = (content_w - 8) / 8;
+    int rows = (content_h - 8) / 16;
     if (cols > TERM_COLS) cols = TERM_COLS;
     if (rows > TERM_ROWS) rows = TERM_ROWS;
 

@@ -3,12 +3,22 @@
 #include <solis/ports.h>
 #include <solis/console.h>
 #include <solis/dbg.h>
+#include <stdbool.h>
 
 static uint16_t io = 0;
 static uint8_t rx_ring[RX_BUF_SIZE] __attribute__((aligned(4)));
 static uint8_t tx_bufs[4][TX_BUF_SIZE] __attribute__((aligned(4)));
 static int tx_cur = 0;
 static int rx_offset = 0;
+
+static bool rtl8139_dma_address(const void *buffer, uint32_t size, uint32_t *address) {
+    uintptr_t start = (uintptr_t)buffer;
+    if (!buffer || !address || size == 0 || start > UINT32_MAX ||
+        (uintptr_t)(size - 1) > UINT32_MAX - start)
+        return false;
+    *address = (uint32_t)start;
+    return true;
+}
 
 #define RTL_REG_MAC  0x00
 #define RTL_REG_RBSTART 0x30
@@ -28,6 +38,12 @@ static int rx_offset = 0;
 #define RCR_64K      (3 << 13)
 
 int rtl8139_init(uint16_t io_base) {
+    uint32_t rbaddr;
+    if (!rtl8139_dma_address(rx_ring, sizeof(rx_ring), &rbaddr)) {
+        dbg_print("[RTL8139] RX ring exceeds 32-bit DMA address range\n");
+        return -1;
+    }
+
     io = io_base;
 
     pci_write_config(0, pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID),
@@ -45,7 +61,6 @@ int rtl8139_init(uint16_t io_base) {
     }
     dbg_print("[RTL8139] Reset done\n");
 
-    uint32_t rbaddr = (uint32_t)(uintptr_t)rx_ring;
     outl(io + RTL_REG_RBSTART, rbaddr);
     dbg_print("[RTL8139] RBSTART=0x");
     dbg_print_hex(rbaddr);
@@ -87,11 +102,15 @@ void rtl8139_get_mac(uint8_t *mac) {
 void rtl8139_send(const uint8_t *data, uint32_t len) {
     if (len > TX_BUF_SIZE) len = TX_BUF_SIZE;
     int idx = tx_cur % 4;
+    uint32_t addr;
+    if (!rtl8139_dma_address(tx_bufs[idx], len, &addr)) {
+        dbg_print("[RTL8139] TX buffer exceeds 32-bit DMA address range\n");
+        return;
+    }
 
     for (uint32_t i = 0; i < len; i++)
         tx_bufs[idx][i] = data[i];
 
-    uint32_t addr = (uint32_t)(uintptr_t)&tx_bufs[idx];
     outl(io + RTL_REG_TSAD + idx * 4, addr);
     outl(io + RTL_REG_TSD + idx * 4, len | 0x10000);
 

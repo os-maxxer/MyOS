@@ -76,8 +76,8 @@ static void mouse_consume(uint8_t data) {
             {
                 int32_t dx = (int32_t)(int8_t)mouse_byte[1];
                 int32_t dy = -(int32_t)(int8_t)mouse_byte[2];
-                if (mouse_byte[0] & 0x40) dy = (mouse_byte[0] & 0x80) ? -127 : 127;
-                if (mouse_byte[0] & 0x20) dx = (mouse_byte[0] & 0x10) ? -127 : 127;
+                if (mouse_byte[0] & 0x40) dx = 0;  /* X overflow */
+                if (mouse_byte[0] & 0x80) dy = 0;  /* Y overflow */
                 if (dx || dy) {
                     mouse_dx += dx;
                     mouse_dy += dy;
@@ -172,7 +172,7 @@ void mouse_init(void) {
 
     mouse_write(0xE8);
     mouse_read();
-    mouse_write(0x02);
+    mouse_write(0x01);
     mouse_read();
 
     /* Enable the scroll wheel: sample rates 200/100/80 followed by a device
@@ -215,12 +215,27 @@ void mouse_init(void) {
 
 void mouse_get_state(struct mouse_state *state) {
     if (state != 0) {
-        int32_t dx = mouse_dx;
-        int32_t dy = mouse_dy;
-        dx = (dx > 0) ? (dx / 2 + 1) : (dx / 2);
-        dy = (dy > 0) ? (dy / 2 + 1) : (dy / 2);
-        state->dx = dx;
-        state->dy = dy;
+        int32_t raw_x = mouse_dx;
+        int32_t raw_y = mouse_dy;
+        mouse_dx = 0;
+        mouse_dy = 0;
+
+        /* Apply sensitivity in fixed point and carry the remainder, so slow
+         * motion accumulates instead of being truncated to zero (which made
+         * the pointer feel laggy) and small steps are not inflated (which
+         * made it jitter). Rounding is symmetric about zero, so the pointer
+         * no longer drifts towards one direction. */
+        int64_t acc_x = (int64_t)raw_x * (int64_t)mouse_sens + mouse_frac_x;
+        int64_t acc_y = (int64_t)raw_y * (int64_t)mouse_sens + mouse_frac_y;
+
+        int32_t out_x = (int32_t)(acc_x / MOUSE_SENS_ONE);
+        int32_t out_y = (int32_t)(acc_y / MOUSE_SENS_ONE);
+
+        mouse_frac_x = (int32_t)(acc_x - (int64_t)out_x * MOUSE_SENS_ONE);
+        mouse_frac_y = (int32_t)(acc_y - (int64_t)out_y * MOUSE_SENS_ONE);
+
+        state->dx = out_x;
+        state->dy = out_y;
         state->buttons = mouse_buttons;
         state->present = true;
     }

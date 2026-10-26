@@ -138,7 +138,7 @@ def create_disk(pkg_dir, output_path):
             file_entries.append((fname, 0, 0, attrs))
             continue
 
-        first_cluster = next_cluster
+        first_cluster = next_cluster if data else 0
         file_size = len(data)
         clusters_needed = (file_size + SECTOR_SIZE - 1) // SECTOR_SIZE
 

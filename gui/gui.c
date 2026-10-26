@@ -26,7 +26,6 @@
 /* ------------------------------------------------------------------ */
 #define MAX_WINDOWS   8
 #define TITLEBAR_H    24
-#define PANEL_H       28
 #define WIN_BORDER    1
 #define BTN_W         22          /* window control button width  */
 #define RESIZE_MARGIN 5
@@ -50,6 +49,16 @@
 #define TASKBAR_SIDE     10
 #define TASKBAR_RADIUS   12
 #define PANEL_H          (TASKBAR_H + TASKBAR_MARGIN)
+#define PIN_COUNT        9
+#define PIN_W            30
+#define PIN_GAP          2
+#define PIN_ICON         22
+#define MIN_TASK_W       70
+#define MAX_TASK_W       150
+#define TASK_GAP         4
+#define LAUNCH_SZ        34
+#define CARD_PAD         7
+#define ITEM_RADIUS      7
 
 /* ------------------------------------------------------------------ */
 /* Palette (BoredOS-inspired, ~14 colors)                              */
@@ -109,6 +118,7 @@ static bool start_menu_open = false;
 static int  menu_hover = -1;
 static int  hover_logo = 0;
 static int  hover_task = -1;
+static int  hover_pin = -1;
 
 static bool logout_requested = false;
 
@@ -232,27 +242,166 @@ static void gui_damage_union(const struct gui_rect *a, const struct gui_rect *b)
 /* ------------------------------------------------------------------ */
 static const struct {
     const char *name;
+    int kind;
     uint32_t color;
-} app_icons[9] = {
-    {"Terminal",      '>', 0xFF5CB85C},
-    {"Notes",         'N', 0xFF4C7BD9},
-    {"Paint",         'P', 0xFFE0576B},
-    {"Settings",      'S', 0xFFD9A441},
-    {"Files",         'F', 0xFF3FA06A},
-    {"Task Manager",  'T', 0xFFB055E0},
-    {"SOLPKG",         'P', 0xFF46A8E8},
-    {"Editor",        'E', 0xFF35B79B},
-    {"Tetris",        'T', 0xFFE0863C},
+} app_icons[10] = {
+    {"Terminal",      0, 0xFF5CB85C},
+    {"Notes",         1, 0xFF4C7BD9},
+    {"Paint",         2, 0xFFE0576B},
+    {"Settings",      3, 0xFFD9A441},
+    {"Files",         4, 0xFF3FA06A},
+    {"Task Manager",  5, 0xFFB055E0},
+    {"SOLPKG",        6, 0xFF46A8E8},
+    {"Editor",        7, 0xFF35B79B},
+    {"Tetris",        8, 0xFFE0863C},
+    {"Blocks",        9, 0xFF9BCF9E},
 };
 
 static void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
 
+static int icon_coord(int x, int size) {
+    return (x * size + 16) / 32;
+}
+
+static int icon_stroke(int size) {
+    return size >= 32 ? 2 : 1;
+}
+
+static void icon_line(int x, int y, int size, int x0, int y0,
+                      int x1, int y1, uint32_t color) {
+    draw_line(x + icon_coord(x0, size), y + icon_coord(y0, size),
+              x + icon_coord(x1, size), y + icon_coord(y1, size), color);
+}
+
+static void icon_rect(int x, int y, int size, int x0, int y0,
+                      int x1, int y1, uint32_t color) {
+    int left = icon_coord(x0, size);
+    int top = icon_coord(y0, size);
+    int right = icon_coord(x1, size);
+    int bottom = icon_coord(y1, size);
+    int stroke = icon_stroke(size);
+    if (right <= left) right = left + 1;
+    if (bottom <= top) bottom = top + 1;
+    graphics_fill_rect(x + left, y + top, right - left, stroke, color);
+    graphics_fill_rect(x + left, y + bottom - stroke, right - left, stroke, color);
+    graphics_fill_rect(x + left, y + top, stroke, bottom - top, color);
+    graphics_fill_rect(x + right - stroke, y + top, stroke, bottom - top, color);
+}
+
+static void icon_circle(int x, int y, int size, int cx, int cy, int radius,
+                        uint32_t color, bool filled) {
+    int center_x = x + icon_coord(cx, size);
+    int center_y = y + icon_coord(cy, size);
+    int r = icon_coord(radius, size);
+    if (r < 1) r = 1;
+    if (filled)
+        graphics_fill_circle(center_x, center_y, r, color);
+    else
+        graphics_draw_circle(center_x, center_y, r, color);
+}
+
 static void draw_app_glyph(int x, int y, int size, int slot) {
-    if (slot < 0 || slot > 8) return;
-    graphics_fill_rect(x, y, size, size, app_icons[slot].color);
-    graphics_draw_rect(x, y, size, size, 0xFF1B1E22);
-    char glyph[2] = {app_icons[slot].glyph, '\0'};
-    graphics_draw_string(x + (size - 8) / 2, y + (size - 16) / 2, glyph, 0xFF000000);
+    if (slot < 0 || slot >= 10) return;
+    uint32_t fg = 0xFFFFFFFF;
+    uint32_t detail = 0xFFE9F0FA;
+    graphics_fill_rounded_rect(x, y, size, size, size / 5, app_icons[slot].color);
+    graphics_draw_rounded_rect(x, y, size, size, size / 5, 0xFF202838);
+
+    switch (app_icons[slot].kind) {
+        case 0:
+            icon_line(x, y, size, 7, 11, 15, 16, fg);
+            icon_line(x, y, size, 15, 16, 7, 21, fg);
+            icon_line(x, y, size, 17, 21, 25, 21, fg);
+            break;
+        case 1:
+            icon_rect(x, y, size, 8, 5, 24, 27, fg);
+            icon_line(x, y, size, 12, 12, 20, 12, app_icons[slot].color);
+            icon_line(x, y, size, 12, 17, 20, 17, app_icons[slot].color);
+            icon_line(x, y, size, 12, 22, 18, 22, app_icons[slot].color);
+            break;
+        case 2:
+            icon_circle(x, y, size, 15, 16, 11, fg, true);
+            icon_circle(x, y, size, 20, 10, 2, app_icons[slot].color, true);
+            icon_circle(x, y, size, 24, 15, 2, app_icons[slot].color, true);
+            icon_circle(x, y, size, 22, 21, 2, app_icons[slot].color, true);
+            icon_circle(x, y, size, 15, 16, 3, app_icons[slot].color, true);
+            break;
+        case 3:
+            icon_circle(x, y, size, 16, 16, 9, fg, false);
+            icon_circle(x, y, size, 16, 16, 3, fg, true);
+            icon_line(x, y, size, 16, 4, 16, 8, fg);
+            icon_line(x, y, size, 16, 24, 16, 28, fg);
+            icon_line(x, y, size, 4, 16, 8, 16, fg);
+            icon_line(x, y, size, 24, 16, 28, 16, fg);
+            icon_line(x, y, size, 7, 7, 10, 10, fg);
+            icon_line(x, y, size, 22, 22, 25, 25, fg);
+            icon_line(x, y, size, 22, 10, 25, 7, fg);
+            icon_line(x, y, size, 7, 25, 10, 22, fg);
+            break;
+        case 4:
+            graphics_fill_rounded_rect(x + icon_coord(4, size), y + icon_coord(10, size),
+                icon_coord(24, size), icon_coord(17, size), size / 10, 0xFFFFD36B);
+            graphics_fill_rounded_rect(x + icon_coord(4, size), y + icon_coord(13, size),
+                icon_coord(24, size), icon_coord(13, size), size / 10, fg);
+            icon_line(x, y, size, 5, 14, 27, 14, 0xFFFFD36B);
+            break;
+        case 5:
+            icon_line(x, y, size, 7, 25, 7, 7, fg);
+            icon_line(x, y, size, 7, 25, 26, 25, fg);
+            graphics_fill_rect(x + icon_coord(11, size), y + icon_coord(17, size),
+                               icon_coord(4, size), icon_coord(7, size), detail);
+            graphics_fill_rect(x + icon_coord(18, size), y + icon_coord(12, size),
+                               icon_coord(4, size), icon_coord(12, size), detail);
+            graphics_fill_rect(x + icon_coord(25, size), y + icon_coord(7, size),
+                               icon_coord(3, size), icon_coord(17, size), detail);
+            break;
+        case 6:
+            icon_line(x, y, size, 16, 5, 27, 11, fg);
+            icon_line(x, y, size, 27, 11, 16, 17, fg);
+            icon_line(x, y, size, 16, 17, 5, 11, fg);
+            icon_line(x, y, size, 5, 11, 16, 5, fg);
+            icon_line(x, y, size, 5, 11, 5, 23, fg);
+            icon_line(x, y, size, 5, 23, 16, 29, fg);
+            icon_line(x, y, size, 16, 29, 27, 23, fg);
+            icon_line(x, y, size, 27, 23, 27, 11, fg);
+            icon_line(x, y, size, 16, 17, 16, 29, fg);
+            break;
+        case 7:
+            icon_rect(x, y, size, 6, 5, 23, 26, fg);
+            icon_line(x, y, size, 10, 12, 19, 12, app_icons[slot].color);
+            icon_line(x, y, size, 10, 17, 17, 17, app_icons[slot].color);
+            icon_line(x, y, size, 10, 22, 15, 22, app_icons[slot].color);
+            icon_line(x, y, size, 19, 26, 28, 17, 0xFFFFE0A3);
+            icon_line(x, y, size, 17, 28, 19, 26, 0xFF303541);
+            break;
+        case 8:
+            graphics_fill_rect(x + icon_coord(6, size), y + icon_coord(6, size),
+                               icon_coord(8, size), icon_coord(8, size), fg);
+            graphics_fill_rect(x + icon_coord(14, size), y + icon_coord(6, size),
+                               icon_coord(8, size), icon_coord(8, size), fg);
+            graphics_fill_rect(x + icon_coord(14, size), y + icon_coord(14, size),
+                               icon_coord(8, size), icon_coord(8, size), fg);
+            graphics_fill_rect(x + icon_coord(14, size), y + icon_coord(22, size),
+                               icon_coord(8, size), icon_coord(5, size), fg);
+            break;
+        case 9:
+            graphics_fill_rect(x + icon_coord(6, size), y + icon_coord(17, size),
+                               icon_coord(9, size), icon_coord(9, size), 0xFF5E493B);
+            graphics_fill_rect(x + icon_coord(16, size), y + icon_coord(17, size),
+                               icon_coord(10, size), icon_coord(9, size), 0xFF795A42);
+            graphics_fill_rect(x + icon_coord(11, size), y + icon_coord(7, size),
+                               icon_coord(10, size), icon_coord(9, size), 0xFF6A9B58);
+            icon_line(x, y, size, 11, 7, 16, 10, 0xFFB8E58E);
+            icon_line(x, y, size, 16, 10, 21, 7, 0xFFB8E58E);
+            icon_line(x, y, size, 16, 10, 16, 16, 0xFFB8E58E);
+            break;
+        default:
+            break;
+    }
+}
+
+static void draw_app_icon(int x, int y, int size, int slot) {
+    draw_app_glyph(x, y, size, slot);
 }
 
 /* ------------------------------------------------------------------ */
@@ -711,6 +860,99 @@ static void draw_starfield_bg(void) {
     }
 }
 
+static void draw_voxel_badge(int x, int y, int cell) {
+    static const uint8_t s_rows[5] = {31, 16, 30, 1, 31};
+    for (int row = 0; row < 5; row++) {
+        for (int col = 0; col < 5; col++) {
+            if (s_rows[row] & (1 << (4 - col))) {
+                uint32_t color = ((row + col) & 1) ? 0xFFC9A7D0 : 0xFFEEE2EF;
+                graphics_fill_rect(x + col * (cell + 2), y + row * (cell + 2),
+                                   cell, cell, color);
+            }
+        }
+    }
+}
+
+static void draw_voxel_system_tile(void) {
+    int sw = (int)graphics_get_width();
+    int sh = (int)graphics_get_height();
+    int cw = sw / 3;
+    if (cw > 340) cw = 340;
+    if (cw < 210) cw = 210;
+    int ch = cw * 3 / 5;
+    if (ch > sh / 3) ch = sh / 3;
+    if (ch < 118) ch = 118;
+    int x = sw - cw - 18;
+    int y = 18;
+
+    graphics_fill_rect(x + 8, y + 8, cw, ch, 0xFF403957);
+    graphics_fill_rect(x, y, cw, ch, 0xFF292A49);
+    graphics_draw_rect(x, y, cw, ch, 0xFFB1A4C9);
+    graphics_fill_rect(x + 1, y + 1, cw - 2, 25, 0xFF5C587F);
+    graphics_fill_rect(x + 10, y + 9, 7, 7, 0xFFE4B779);
+    graphics_fill_rect(x + 21, y + 9, 7, 7, 0xFF91C9A4);
+    graphics_fill_rect(x + 32, y + 9, 7, 7, 0xFFE3818D);
+    graphics_draw_string(x + 48, y + 6, "SOLIS  /  SYSTEM TILE", 0xFFF2EDF5);
+
+    draw_voxel_badge(x + 16, y + 43, 7);
+    graphics_draw_string(x + 96, y + 44, "SOLIS OS", 0xFFFFFFFF);
+    graphics_draw_string(x + 96, y + 68, "DESKTOP READY", 0xFFD2C9E2);
+    graphics_draw_string(x + 96, y + 90, "SECTOR 09  /  64-BIT", 0xFFB4AFCD);
+    graphics_fill_rect(x + 96, y + ch - 25, cw - 112, 8, 0xFF49516F);
+    graphics_fill_rect(x + 96, y + ch - 25, (cw - 112) * 3 / 4, 8, 0xFF91C9A4);
+}
+
+static void draw_voxel_bg(void) {
+    uint32_t sw = graphics_get_width();
+    uint32_t sh = graphics_get_height();
+    int horizon = (int)sh * 64 / 100;
+    int star_range = horizon > 30 ? horizon - 30 : 1;
+    graphics_fill_gradient_v(0, 0, sw, sh, 0xFF626FA8, 0xFF9A83B2);
+
+    uint32_t seed = 29;
+    for (int i = 0; i < 52; i++) {
+        seed = seed * 1103515245 + 12345;
+        int sx = (int)((seed >> 16) % sw);
+        seed = seed * 1103515245 + 12345;
+        int sy = (int)((seed >> 16) % (uint32_t)star_range);
+        int size = 1 + ((seed >> 21) & 1);
+        graphics_fill_rect(sx, sy, size, size, 0xFFC2C1DC);
+    }
+
+    for (int x = 0; x < (int)sw; x += 48) {
+        int rise = (x * 17 + x / 3) % 58;
+        int top = horizon - rise;
+        graphics_fill_rect(x, top, 48, (int)sh - top, 0xFF5B5B83);
+        graphics_fill_rect(x, top, 48, 4, 0xFF8B82AA);
+        graphics_fill_rect(x + 4, top + 14, 9, 7, 0xFF716C99);
+        graphics_fill_rect(x + 28, top + 30, 8, 6, 0xFF716C99);
+    }
+
+    int sx = (int)sw * 36 / 100;
+    int sy = horizon - 58;
+    uint32_t shadow = 0xFF383650;
+    graphics_fill_rect(sx - 24, sy - 22, 48, 88, shadow);
+    graphics_fill_rect(sx - 10, sy - 48, 20, 30, shadow);
+    graphics_fill_rect(sx - 78, sy - 12, 54, 18, shadow);
+    graphics_fill_rect(sx - 124, sy + 5, 54, 16, shadow);
+    graphics_fill_rect(sx - 162, sy + 20, 40, 14, shadow);
+    graphics_fill_rect(sx + 24, sy - 18, 72, 17, shadow);
+    graphics_fill_rect(sx + 82, sy - 2, 54, 16, shadow);
+    graphics_fill_rect(sx + 130, sy + 12, 34, 14, shadow);
+    graphics_fill_rect(sx - 42, sy + 52, 22, 34, shadow);
+    graphics_fill_rect(sx + 20, sy + 52, 22, 34, shadow);
+    graphics_fill_rect(sx - 61, sy + 83, 48, 8, 0xFF29273F);
+    graphics_fill_rect(sx + 12, sy + 83, 48, 8, 0xFF29273F);
+
+    graphics_fill_rect(0, horizon, sw, sh - (uint32_t)horizon, 0xFF393953);
+    for (int x = 0; x < (int)sw; x += 64) {
+        int ledge = 12 + ((x * 5 + 23) % 34);
+        graphics_fill_rect(x, horizon + ledge, 64, (int)sh - horizon - ledge, 0xFF46425F);
+        graphics_fill_rect(x, horizon + ledge, 64, 5, 0xFF80916F);
+        graphics_fill_rect(x + 12, horizon + ledge + 20, 20, 4, 0xFF574F6D);
+    }
+}
+
 static void draw_desktop_icons(void) {
     struct { int x; int y; } pos[7] = {
         {28, 60}, {116, 60}, {204, 60}, {292, 60},
@@ -725,7 +967,7 @@ static void draw_desktop_icons(void) {
         graphics_draw_string(pos[i].x + (56 - len * 8) / 2, pos[i].y + 60, app_icons[slot].name, 0xFFC8C8D4);
     }
 
-    draw_voxel_system_tile();
+    if (gui_theme == GUI_THEME_VOXEL) draw_voxel_system_tile();
 }
 
 static void gui_draw_desktop(void) {
@@ -739,9 +981,16 @@ static void gui_draw_desktop(void) {
         draw_sunset_bg();
     } else if (gui_theme == GUI_THEME_CHERRY_BLOSSOM) {
         draw_cherry_blossom_bg();
+    } else if (gui_theme == GUI_THEME_VOXEL) {
+        draw_voxel_bg();
+    } else if (gui_theme == GUI_THEME_BORED) {
+        draw_bored_bg();
+    } else if (gui_theme == GUI_THEME_AURORA) {
+        draw_aurora_bg();
     } else {
         graphics_fill_rect(0, 0, graphics_get_width(), graphics_get_height(), bg_color);
     }
+    draw_desktop_icons();
 }
 
 /* bg_cache_usable means "the buffer holds a real desktop image that can be
@@ -830,8 +1079,20 @@ static void gui_format_date(char *buf, int size) {
 /* launcher on the left, pinned app launchers plus one button per open */
 /* window in the middle, and the system tray on the right.            */
 /* ------------------------------------------------------------------ */
+static int task_wins[MAX_WINDOWS];
+static int task_n = 0;
+
+struct tb_layout {
+    int card_x, card_y, card_w, card_h;
+    int launch_x, launch_y, launch_sz;
+    int tray_x, tray_w;
+    int free_x, free_w;
+    int pin_x, pin_n;
+    int task_x, task_w, task_y, task_h;
+};
+
 static int tray_width(void) {
-    return 172;
+    return 168;
 }
 
 static void draw_text_right(int x, int y, const char *s, uint32_t c) {
@@ -840,28 +1101,116 @@ static void draw_text_right(int x, int y, const char *s, uint32_t c) {
     graphics_draw_string(x - len * 8, y, s, c);
 }
 
-static void gui_draw_tray(void) {
-    int sw = graphics_get_width();
-    int sh = graphics_get_height();
-    int py = sh - PANEL_H;
-    int cx = sw - 8;                 /* right margin */
-    int y = py + (PANEL_H - 16) / 2;
+static void gui_build_task_list(void) {
+    task_n = 0;
+    for (int zi = 0; zi < zcount && task_n < MAX_WINDOWS; zi++) {
+        int i = zorder[zi];
+        if (windows[i].visible) task_wins[task_n++] = i;
+    }
+}
 
+static bool app_running(int app_id) {
+    for (int i = 0; i < MAX_WINDOWS; i++)
+        if (windows[i].visible && windows[i].app_id == app_id) return true;
+    return false;
+}
+
+static void taskbar_compute(struct tb_layout *L) {
+    int sw = (int)graphics_get_width();
+    int sh = (int)graphics_get_height();
+
+    L->card_w = sw - TASKBAR_SIDE * 2;
+    if (L->card_w < 160) L->card_w = sw;
+    L->card_h = TASKBAR_H;
+    L->card_x = (sw - L->card_w) / 2;
+    L->card_y = sh - TASKBAR_MARGIN - L->card_h;
+    if (L->card_y < 0) L->card_y = 0;
+
+    L->launch_sz = LAUNCH_SZ;
+    int max_sz = L->card_h - 2 * (CARD_PAD - 3);
+    if (L->launch_sz > max_sz) L->launch_sz = max_sz;
+    L->launch_x = L->card_x + CARD_PAD;
+    L->launch_y = L->card_y + (L->card_h - L->launch_sz) / 2;
+
+    L->tray_w = tray_width();
+    L->tray_x = L->card_x + L->card_w - CARD_PAD - L->tray_w;
+    L->free_x = L->launch_x + L->launch_sz + CARD_PAD + 2;
+    L->free_w = L->tray_x - 4 - L->free_x;
+    if (L->free_w < 0) L->free_w = 0;
+
+    int need = task_n > 0 ? task_n * MIN_TASK_W + (task_n - 1) * TASK_GAP : 0;
+    int pins = PIN_COUNT;
+    if (task_n > 0) {
+        int spare = L->free_w - need - 12;
+        pins = spare > 0 ? spare / (PIN_W + PIN_GAP) : 0;
+    }
+    if (pins > PIN_COUNT) pins = PIN_COUNT;
+    if (pins < 0) pins = 0;
+
+    int pins_w = pins > 0 ? pins * (PIN_W + PIN_GAP) - PIN_GAP : 0;
+    int sep = pins > 0 && task_n > 0 ? 12 : 0;
+    int task_area = L->free_w - pins_w - sep;
+    int bw = 0;
+    if (task_n > 0) {
+        bw = (task_area - (task_n - 1) * TASK_GAP) / task_n;
+        if (bw > MAX_TASK_W) bw = MAX_TASK_W;
+        if (bw < MIN_TASK_W) bw = MIN_TASK_W;
+    }
+    L->task_w = bw;
+    L->task_h = L->card_h - 2 * (CARD_PAD - 3);
+    L->task_y = L->card_y + (L->card_h - L->task_h) / 2;
+
+    int group = pins_w + sep +
+                (task_n > 0 ? task_n * bw + (task_n - 1) * TASK_GAP : 0);
+    int gx = L->free_x + (L->free_w - group) / 2;
+    if (gx < L->free_x) gx = L->free_x;
+    L->pin_x = gx;
+    L->pin_n = pins;
+    L->task_x = gx + pins_w + sep;
+}
+
+static int pin_at(int mx, int my) {
+    struct tb_layout L;
+    gui_build_task_list();
+    taskbar_compute(&L);
+    if (L.pin_n <= 0 || my < L.task_y - 2 || my > L.task_y + L.task_h + 2)
+        return -1;
+    for (int i = 0; i < L.pin_n; i++) {
+        int x = L.pin_x + i * (PIN_W + PIN_GAP);
+        if (mx >= x - 1 && mx < x + PIN_W) return i;
+    }
+    return -1;
+}
+
+static int task_at(int mx, int my) {
+    struct tb_layout L;
+    gui_build_task_list();
+    taskbar_compute(&L);
+    if (task_n == 0 || L.task_w <= 0 ||
+        my < L.task_y - 2 || my > L.task_y + L.task_h + 2)
+        return -1;
+    for (int i = 0; i < task_n; i++) {
+        int x = L.task_x + i * (L.task_w + TASK_GAP);
+        if (mx >= x && mx < x + L.task_w) return task_wins[i];
+    }
+    return -1;
+}
+
+static void gui_draw_tray(int tx, int ty, int tw, int th) {
+    int y = ty + (th - 16) / 2;
+    int right = tx + tw;
     char timebuf[8];
     gui_format_time(timebuf, 8);
-    draw_text_right(cx, y, timebuf, C_TEXT);
-    cx -= 48;
+    draw_text_right(right, y, timebuf, C_TEXT);
+    right -= 46;
 
     char datebuf[12];
     gui_format_date(datebuf, 12);
-    draw_text_right(cx, y, datebuf, C_TEXT_DIM);
-    cx -= 40;
+    draw_text_right(right, y, datebuf, C_TEXT_DIM);
+    right -= 42;
+    graphics_fill_rect(right, ty + 8, 1, th - 16, C_PANEL_LINE);
+    right -= 12;
 
-    /* separator */
-    graphics_fill_rect(cx - 6, py + 7, 1, PANEL_H - 14, C_PANEL_LINE);
-    cx -= 14;
-
-    /* memory indicator */
     char rambuf[12];
     uint32_t mb = sys_get_total_ram();
     rambuf[0] = 'R'; rambuf[1] = 'A'; rambuf[2] = 'M'; rambuf[3] = ' ';
@@ -873,115 +1222,102 @@ static void gui_draw_tray(void) {
     while (ti > 0) rambuf[bi++] = tmp[--ti];
     rambuf[bi++] = 'M';
     rambuf[bi++] = '\0';
-    draw_text_right(cx, y, rambuf, C_TEXT_DIM);
+    draw_text_right(right, y, rambuf, C_TEXT_DIM);
 }
 
-/* Task buttons */
-static int task_wins[MAX_WINDOWS];
-static int task_n = 0;
-
-static void gui_build_task_list(void) {
-    task_n = 0;
-    for (int zi = 0; zi < zcount && task_n < MAX_WINDOWS; zi++) {
-        int i = zorder[zi];
-        if (windows[i].visible) task_wins[task_n++] = i;
+static void gui_draw_taskbar_shadow(const struct tb_layout *L) {
+    int fb_w = (int)graphics_get_width();
+    int fb_h = (int)graphics_get_height();
+    for (int off = 1; off <= 5; off++) {
+        int alpha = 16 - off * 3;
+        if (alpha <= 0) continue;
+        int sy = L->card_y - off;
+        if (sy < 0 || sy >= fb_h) continue;
+        for (int x = L->card_x + TASKBAR_RADIUS;
+             x < L->card_x + L->card_w - TASKBAR_RADIUS; x++) {
+            if (x >= 0 && x < fb_w)
+                graphics_put_pixel(x, sy,
+                    blend_pixel(graphics_get_pixel(x, sy), 0xFF000000, alpha));
+        }
     }
 }
 
-static void task_geometry(int *start_x, int *btn_w, int *gap) {
-    int sw = graphics_get_width();
-    int avail = sw - LOGO_W - 16 - tray_width() - 24;
-    int n = task_n;
-    if (n == 0) { *start_x = 0; *btn_w = 0; *gap = 4; return; }
-    int bw = (avail - (n - 1) * 4) / n;
-    if (bw > 160) bw = 160;
-    if (bw < 80) bw = 80;
-    *btn_w = bw;
-    *gap = 4;
-    int total = n * bw + (n - 1) * *gap;
-    *start_x = LOGO_W + 8 + (sw - LOGO_W - 8 - tray_width() - 8 - total) / 2;
-    if (*start_x < LOGO_W + 8) *start_x = LOGO_W + 8;
+static void gui_draw_launcher(const struct tb_layout *L) {
+    int x = L->launch_x, y = L->launch_y, size = L->launch_sz;
+    uint32_t bg = start_menu_open ? C_ACTIVE : (hover_logo ? C_BTN_HOVER : C_BTN);
+    uint32_t border = start_menu_open ? C_ACTIVE_DK : C_PANEL_LINE;
+    graphics_fill_rounded_rect(x, y, size, size, ITEM_RADIUS + 1, bg);
+    graphics_draw_rounded_rect(x, y, size, size, ITEM_RADIUS + 1, border);
+
+    int gx = x + size / 2 - 9, gy = y + size / 2 - 5;
+    graphics_fill_rounded_rect(gx, gy, 4, 4, 1, C_TEXT);
+    graphics_fill_rounded_rect(gx + 7, gy, 4, 4, 1, C_ACTIVE);
+    graphics_fill_rounded_rect(gx, gy + 7, 4, 4, 1, C_TEXT_DIM);
+    graphics_fill_rounded_rect(gx + 7, gy + 7, 4, 4, 1, C_ACTIVE);
 }
 
 static void gui_draw_pin(const struct tb_layout *L, int slot, int x) {
-    int y = L->task_y;
-    int h = L->task_h;
+    int y = L->task_y, h = L->task_h;
     int ix = x + (PIN_W - PIN_ICON) / 2;
     int iy = y + (h - PIN_ICON) / 2;
-
-    if (slot == hover_pin) {
+    if (slot == hover_pin)
         graphics_fill_rounded_rect(x - 1, y, PIN_W + 2, h, ITEM_RADIUS, C_BTN_HOVER);
-    }
     draw_app_icon(ix, iy, PIN_ICON, slot);
-
-    if (app_running(slot + 1)) {
+    if (app_running(slot + 1))
         graphics_fill_rounded_rect(x + PIN_W / 2 - 5, y + h - 3, 10, 2, 1, C_ACTIVE);
-    }
 }
 
 static void gui_draw_task_button(const struct tb_layout *L, int idx, int x) {
     struct gui_window *w = &windows[idx];
-    int py = graphics_get_height() - PANEL_H;
-    int y = py + 3;
-    int h = PANEL_H - 6;
-    bool hov = (idx == hover_task);
-    uint32_t bg = w->focused ? C_ACTIVE : (hov ? C_BTN_HOVER : C_BTN);
-    uint32_t br = w->focused ? C_ACTIVE_DK : C_PANEL_LINE;
-    uint32_t tc = w->focused ? 0xFFFFFFFF
-                 : (w->minimized ? C_TEXT_DIM : C_TEXT);
-    graphics_fill_rect(x, y, bw, h, bg);
-    graphics_draw_rect(x, y, bw, h, br);
+    int y = L->task_y, width = L->task_w, height = L->task_h;
+    bool hovered = idx == hover_task;
+    uint32_t bg = w->focused ? 0xFF23384E : (hovered ? C_BTN_HOVER : C_BTN);
+    uint32_t border = w->focused ? C_ACTIVE : C_PANEL_LINE;
+    graphics_fill_rounded_rect(x, y, width, height, ITEM_RADIUS, bg);
+    graphics_draw_rounded_rect(x, y, width, height, ITEM_RADIUS, border);
 
-    /* running indicator dot for focused app */
-    if (w->focused) {
-        graphics_fill_rect(x + 3, y + h / 2 - 1, 3, 3, 0xFFFFFFFF);
-    } else if (!w->minimized) {
-        graphics_fill_rect(x + 3, y + h / 2 - 1, 3, 3, C_TEXT_DIM);
-    }
+    int slot = w->app_id - 1;
+    if (slot >= 0 && slot < 10)
+        draw_app_icon(x + 6, y + (height - 14) / 2, 14, slot);
 
-    int tx = x + 10;
-    int tl = 0;
-    const char *t = w->title;
-    for (const char *p = t; *p; p++) tl++;
-    int maxc = (bw - 14) / 8;
-    if (tl > maxc) tl = maxc;
+    uint32_t text_color = w->minimized ? C_TEXT_DIM : C_TEXT;
+    int max_chars = (width - 32) / 8;
+    int title_len = 0;
+    while (w->title[title_len] && title_len < max_chars) title_len++;
     char label[24];
-    for (int i = 0; i < tl; i++) label[i] = t[i];
-    label[tl] = '\0';
-    graphics_draw_string(tx, y + (h - 16) / 2, label, tc);
+    for (int i = 0; i < title_len; i++) label[i] = w->title[i];
+    label[title_len] = '\0';
+    graphics_draw_string(x + 26, y + (height - 16) / 2, label, text_color);
+
+    if (w->focused)
+        graphics_fill_rounded_rect(x + width / 2 - 8, y + height - 4, 16, 2, 1, C_ACTIVE);
+    else if (!w->minimized)
+        graphics_fill_rounded_rect(x + width / 2 - 5, y + height - 4, 10, 2, 1, C_PANEL_LINE);
 }
 
 static void gui_draw_panel(void) {
-    int sw = graphics_get_width();
-    int sh = graphics_get_height();
-    int py = sh - PANEL_H;
-
-    graphics_fill_rect(0, py, sw, PANEL_H, C_PANEL);
-    graphics_fill_rect(0, py, sw, 1, C_PANEL_LINE);
-    graphics_fill_rect(0, py + 1, sw, 1, 0xFF2E3238);
-
-    /* logo / launcher button */
-    int lx = 4, ly = py + 3, lw = LOGO_W, lh = PANEL_H - 6;
-    uint32_t lbg = hover_logo ? (start_menu_open ? C_ACTIVE : C_BTN_HOVER) : C_BTN;
-    graphics_fill_rect(lx, ly, lw, lh, lbg);
-    graphics_draw_rect(lx, ly, lw, lh, start_menu_open ? C_ACTIVE_DK : C_PANEL_LINE);
-    /* small pixel grid logo */
-    int gx = lx + lw / 2 - 9, gy = ly + lh / 2 - 5;
-    graphics_fill_rect(gx, gy, 4, 4, C_TEXT);
-    graphics_fill_rect(gx + 7, gy, 4, 4, C_TEXT);
-    graphics_fill_rect(gx, gy + 7, 4, 4, C_TEXT);
-    graphics_fill_rect(gx + 7, gy + 7, 4, 4, C_TEXT);
-
-    /* task buttons */
+    struct tb_layout L;
     gui_build_task_list();
-    int sx, bw, gap;
-    task_geometry(&sx, &bw, &gap);
-    for (int i = 0; i < task_n; i++) {
-        gui_draw_task_button(task_wins[i], sx, bw);
-        sx += bw + gap;
-    }
+    taskbar_compute(&L);
 
-    gui_draw_tray();
+    gui_draw_taskbar_shadow(&L);
+    graphics_fill_rounded_rect(L.card_x, L.card_y, L.card_w, L.card_h,
+                               TASKBAR_RADIUS, C_PANEL);
+    graphics_fill_rect(L.card_x + TASKBAR_RADIUS, L.card_y + 1,
+                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF1B2B3E);
+    graphics_draw_rounded_rect(L.card_x, L.card_y, L.card_w, L.card_h,
+                               TASKBAR_RADIUS, C_PANEL_LINE);
+
+    gui_draw_launcher(&L);
+    for (int i = 0; i < L.pin_n; i++)
+        gui_draw_pin(&L, i, L.pin_x + i * (PIN_W + PIN_GAP));
+    if (L.pin_n > 0 && task_n > 0) {
+        int sep_x = L.pin_x + L.pin_n * (PIN_W + PIN_GAP) - PIN_GAP + 5;
+        graphics_fill_rect(sep_x, L.card_y + 10, 1, L.card_h - 20, C_PANEL_LINE);
+    }
+    for (int i = 0; i < task_n; i++)
+        gui_draw_task_button(&L, task_wins[i], L.task_x + i * (L.task_w + TASK_GAP));
+    gui_draw_tray(L.tray_x, L.card_y, L.tray_w, L.card_h);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1671,7 +2007,7 @@ static void gui_damage_active_content(void) {
 static void gui_damage_taskbar(void) {
     struct tb_layout L;
     taskbar_compute(&L);
-    gui_damage_pad(L.card_x, L.card_y, L.card_w, L.card_h, 4);
+    gui_damage_pad(L.card_x, L.card_y, L.card_w, L.card_h, 5);
 }
 
 /* The clock only rewrites the right-aligned tray text, so the damage can stay
@@ -1741,7 +2077,8 @@ static void gui_paint_region(int rx, int ry, int rw, int rh) {
 
     {
         int sw = (int)graphics_get_width();
-        if (rect_overlaps(rx, ry, rw, rh, 0, sw - PANEL_H, sw, PANEL_H))
+        int sh = (int)graphics_get_height();
+        if (rect_overlaps(rx, ry, rw, rh, 0, sh - PANEL_H, sw, PANEL_H))
             gui_draw_panel();
     }
     if (start_menu_open) {
@@ -1871,8 +2208,11 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     }
     /* hover tracking: taskbar */
     if (mouse_y >= py) {
-        int new_logo = (mouse_x >= 4 && mouse_x < 4 + LOGO_W) ? 1 : 0;
-        if (new_logo != hover_logo) { hover_logo = new_logo; redraw_pending = true; }
+        struct tb_layout L;
+        taskbar_compute(&L);
+        int new_logo = (mouse_x >= L.launch_x && mouse_x < L.launch_x + L.launch_sz &&
+                        mouse_y >= L.launch_y && mouse_y < L.launch_y + L.launch_sz) ? 1 : 0;
+        int new_pin = pin_at(mouse_x, mouse_y);
         int new_task = task_at(mouse_x, mouse_y);
         if (new_logo != hover_logo) { hover_logo = new_logo; gui_damage_taskbar(); }
         if (new_pin != hover_pin) { hover_pin = new_pin; gui_damage_taskbar(); }
@@ -2046,17 +2386,25 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
 
     /* taskbar */
     if (mouse_y >= py) {
-        if (mouse_x >= 4 && mouse_x < 4 + LOGO_W) {
+        struct tb_layout L;
+        taskbar_compute(&L);
+        if (mouse_x >= L.launch_x && mouse_x < L.launch_x + L.launch_sz &&
+            mouse_y >= L.launch_y && mouse_y < L.launch_y + L.launch_sz) {
             gui_toggle_start_menu();
         } else {
-            int idx = task_at(mouse_x, mouse_y);
-            if (idx >= 0) {
+            int pin = pin_at(mouse_x, mouse_y);
+            if (pin >= 0) {
+                gui_launch_app(pin);
+            } else {
+                int idx = task_at(mouse_x, mouse_y);
+                if (idx >= 0) {
                 if (windows[idx].minimized) {
                     gui_restore_window(idx);
                 } else if (windows[idx].focused) {
                     gui_minimize_window(idx);
                 } else {
                     gui_focus_window(idx);
+                }
                 }
             }
         }
@@ -2118,20 +2466,7 @@ void gui_handle_scroll(int notches) {
 }
 
 void gui_update_clock(void) {
-    if (redraw_pending) return;
-    int sw = graphics_get_width();
-    int sh = graphics_get_height();
-    int py = sh - PANEL_H;
-    int tw = tray_width();
-    int tx = sw - 8 - tw;
-    if (prev_cursor_x >= 0) cursor_restore_bg(prev_cursor_x, prev_cursor_y);
-    graphics_fill_rect(tx, py, tw, PANEL_H, C_PANEL);
-    graphics_fill_rect(tx, py, tw, 1, C_PANEL_LINE);
-    gui_draw_tray();
-    if (prev_cursor_x >= 0) {
-        cursor_save_bg(mouse_x, mouse_y);
-        graphics_draw_mouse_cursor(mouse_x, mouse_y, 0xFFFFFFFF);
-    }
+    gui_damage_tray();
 }
 
 bool gui_take_logout(void) {

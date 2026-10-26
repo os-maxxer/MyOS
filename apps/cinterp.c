@@ -5,6 +5,14 @@
 typedef int32_t Value;
 typedef uint32_t Addr;
 
+static Addr addr_from_ptr(const void *ptr) {
+    return (Addr)(uintptr_t)ptr;
+}
+
+static void *addr_to_ptr(Addr addr) {
+    return (void *)(uintptr_t)addr;
+}
+
 /* ------------------------------------------------------------------ */
 /* Limits                                                              */
 /* ------------------------------------------------------------------ */
@@ -347,7 +355,7 @@ static struct sym *new_sym(const char *name, struct type *t, int32_t line) {
 /* ------------------------------------------------------------------ */
 
 static int in_region(Addr a, uint32_t size, const void *base, uint32_t len) {
-    Addr lo = (Addr)base;
+    Addr lo = addr_from_ptr(base);
     Addr hi = lo + len;
     if (a < lo || a >= hi) return 0;
     return (hi - a) >= size;
@@ -363,26 +371,26 @@ static int mem_ok(Addr a, uint32_t size) {
 
 static int32_t mem_read(Addr a, int width) {
     if (!mem_ok(a, (uint32_t)width)) return 0;
-    if (width == 1) return *(const int8_t *)a;
+    if (width == 1) return *(const int8_t *)addr_to_ptr(a);
     if (width == 2) {
         int16_t v;
-        const uint8_t *p = (const uint8_t *)a;
+        const uint8_t *p = (const uint8_t *)addr_to_ptr(a);
         v = (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
         return v;
     }
-    return *(const int32_t *)(const void *)a;
+    return *(const int32_t *)addr_to_ptr(a);
 }
 
 static void mem_write(Addr a, int32_t value, int width) {
     if (!mem_ok(a, (uint32_t)width)) return;
-    if (width == 1) { *(int8_t *)a = (int8_t)value; return; }
+    if (width == 1) { *(int8_t *)addr_to_ptr(a) = (int8_t)value; return; }
     if (width == 2) {
-        uint8_t *p = (uint8_t *)a;
+        uint8_t *p = (uint8_t *)addr_to_ptr(a);
         p[0] = (uint8_t)value;
         p[1] = (uint8_t)(value >> 8);
         return;
     }
-    *(int32_t *)(void *)a = value;
+    *(int32_t *)addr_to_ptr(a) = value;
 }
 
 static int32_t align4(int32_t v) { return (v + 3) & ~3; }
@@ -934,7 +942,7 @@ static struct node *parse_primary(struct parser *p) {
         return make_num(v, line);
     }
     if (p->tok.kind == TK_STR) {
-        Addr addr = (Addr)p->tok.text;
+        Addr addr = addr_from_ptr(p->tok.text);
         advance(p);
         struct node *n = new_node(N_STR, line);
         if (!n) return 0;
@@ -987,7 +995,7 @@ static struct node *parse_primary(struct parser *p) {
              * lives in the identifier pool, so its address is enough. */
             struct node *callee = new_node(N_STR, line);
             if (!callee) return 0;
-            callee->num = (Value)(Addr)name;
+            callee->num = (Value)addr_from_ptr(name);
             n->c = callee;
             n->type = ty_int;
             return n;
@@ -1720,7 +1728,8 @@ static void emit_str(const char *s, int32_t len) {
 /* Copy from a guest string. */
 static int32_t ci_strlen(Addr a) {
     int32_t n = 0;
-    while (n < 4096 && mem_ok((Addr)(a + n), 1) && *(const char *)(a + n)) n++;
+    while (n < 4096 && mem_ok((Addr)(a + n), 1) &&
+           *(const char *)addr_to_ptr((Addr)(a + n))) n++;
     return n;
 }
 
@@ -1738,8 +1747,8 @@ static int eval(struct node *n);
 static int exec_stmt(struct node *n, uint32_t frame_base);
 
 static Addr var_addr(struct sym *s, uint32_t frame_base) {
-    if (s->is_global) return (Addr)(global_mem + s->offset);
-    return (Addr)(stack_mem + frame_base + s->offset);
+    if (s->is_global) return addr_from_ptr(global_mem + s->offset);
+    return addr_from_ptr(stack_mem + frame_base + s->offset);
 }
 
 static Value load_value(struct type *t, Addr addr) {
@@ -1956,7 +1965,7 @@ static Value call_builtin(int which, Value *argv, int argc, int32_t line) {
             return builtin_printf(argv, argc);
         case BI_PUTS: {
             if (argc < 1) return 0;
-            emit_str((const char *)(Addr)argv[0], ci_strlen((Addr)argv[0]));
+            emit_str((const char *)addr_to_ptr((Addr)argv[0]), ci_strlen((Addr)argv[0]));
             emit('\n');
             return 1;
         }
@@ -2037,7 +2046,8 @@ static Value call_function(int32_t fi, Value *argv, int argc, int32_t line) {
     int ncopy = argc < f->nparams ? argc : f->nparams;
     for (int i = 0; i < ncopy; i++) {
         struct type *pt = f->params[i] ? f->params[i]->type : ty_int;
-        mem_write((Addr)(stack_mem + base + f->param_off[i]), argv[i], type_size(pt) > 0 ? type_size(pt) : 4);
+        mem_write(addr_from_ptr(stack_mem + base + f->param_off[i]), argv[i],
+                  type_size(pt) > 0 ? type_size(pt) : 4);
     }
 
     depth++;
@@ -2169,7 +2179,7 @@ static Value eval(struct node *n) {
         }
 
         case N_CALL: {
-            const char *name = (const char *)(Addr)n->c->num;
+            const char *name = (const char *)addr_to_ptr((Addr)n->c->num);
             int fi = find_func_by_name(name);
             if (fi < 0) { fail(n->line, "undefined function"); aborted = 1; return 0; }
             Value argv[CI_MAX_ARGS];

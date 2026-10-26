@@ -4,14 +4,41 @@
 
 #define ACPI_SEARCH_START 0x000E0000u
 #define ACPI_SEARCH_END   0x00100000u
+#define ACPI_IDENTITY_MAP_LIMIT (512ULL * 1024 * 1024 * 1024)
+#define ACPI_MAX_RSDP_LENGTH 4096
 #define ACPI_RSDP_SIG     "RSD PTR "
+#define ACPI_XSDT_SIG     "XSDT"
 #define ACPI_RSDT_SIG     "RSDT"
 #define ACPI_FACP_SIG     "FACP"
 #define ACPI_DSDT_SIG     "DSDT"
 
 static bool acpi_available = false;
-static uint32_t rsdt_address = 0;
-static uint32_t dsdt_address = 0;
+static uint64_t rsdt_address = 0;
+static uint64_t xsdt_address = 0;
+static uint64_t dsdt_address = 0;
+
+static int acpi_memcmp(const void *a, const void *b, uint32_t count);
+static uint8_t acpi_checksum(const void *ptr, uint32_t length);
+
+static bool acpi_address_is_mapped(uint64_t address, uint64_t size) {
+    return address != 0 && address < ACPI_IDENTITY_MAP_LIMIT &&
+           size <= ACPI_IDENTITY_MAP_LIMIT - address;
+}
+
+static const struct acpi_sdt_header *acpi_get_valid_sdt(uint64_t address,
+                                                         const char *signature) {
+    if (!acpi_address_is_mapped(address, sizeof(struct acpi_sdt_header))) return 0;
+
+    const struct acpi_sdt_header *header =
+        (const struct acpi_sdt_header *)(uintptr_t)address;
+    if (header->length < sizeof(*header) ||
+        !acpi_address_is_mapped(address, header->length) ||
+        acpi_checksum(header, header->length) != 0 ||
+        (signature && acpi_memcmp(header->signature, signature, 4) != 0))
+        return 0;
+
+    return header;
+}
 
 static int acpi_memcmp(const void *a, const void *b, uint32_t count) {
     const uint8_t *pa = (const uint8_t *)a;
@@ -31,7 +58,7 @@ static uint8_t acpi_checksum(const void *ptr, uint32_t length) {
 
 static void *acpi_scan_rsdp(void) {
     for (uint32_t addr = ACPI_SEARCH_START; addr < ACPI_SEARCH_END; addr += 16) {
-        uint8_t *ptr = (uint8_t *)addr;
+        uint8_t *ptr = (uint8_t *)(uintptr_t)addr;
         if (acpi_memcmp(ptr, ACPI_RSDP_SIG, 8) == 0) {
             struct acpi_rsdp_v1 *rsdp = (struct acpi_rsdp_v1 *)ptr;
             if (acpi_checksum(rsdp, 20) == 0) {
@@ -107,7 +134,7 @@ bool acpi_scan_touchpad_hints(struct acpi_touchpad_hints *out) {
 
     if (!acpi_is_available() || dsdt_address == 0) return false;
 
-    const uint8_t *dsdt = (const uint8_t *)dsdt_address;
+    const uint8_t *dsdt = (const uint8_t *)(uintptr_t)dsdt_address;
     const struct acpi_sdt_header *hdr = (const struct acpi_sdt_header *)dsdt;
     uint32_t len = hdr->length;
     if (len == 0) return false;
@@ -131,6 +158,7 @@ bool acpi_scan_touchpad_hints(struct acpi_touchpad_hints *out) {
 bool acpi_init(void) {
     acpi_available = false;
     rsdt_address = 0;
+    xsdt_address = 0;
     dsdt_address = 0;
 
     void *rsdp_ptr = acpi_scan_rsdp();
@@ -141,40 +169,71 @@ bool acpi_init(void) {
 
     struct acpi_rsdp_v1 *rsdp = (struct acpi_rsdp_v1 *)rsdp_ptr;
     rsdt_address = rsdp->rsdt_address;
-    if (rsdt_address == 0) {
+    if (rsdp->revision >= 2) {
+        struct acpi_rsdp_v2 *rsdp2 = (struct acpi_rsdp_v2 *)rsdp_ptr;
+        if (rsdp2->length >= sizeof(*rsdp2) &&
+            rsdp2->length <= ACPI_MAX_RSDP_LENGTH &&
+            acpi_checksum(rsdp2, rsdp2->length) == 0)
+            xsdt_address = rsdp2->xsdt_address;
+    }
+
+    const struct acpi_sdt_header *root = 0;
+    bool root_is_xsdt = false;
+    if (xsdt_address != 0) {
+        root = acpi_get_valid_sdt(xsdt_address, ACPI_XSDT_SIG);
+        root_is_xsdt = root != 0;
+    }
+    if (!root && rsdt_address != 0)
+        root = acpi_get_valid_sdt(rsdt_address, ACPI_RSDT_SIG);
+    if (!root) {
         dbg_set_driver_state("acpi", DBG_DRIVER_FAILED);
         return false;
     }
+    dbg_print(root_is_xsdt ? "[ACPI] XSDT active\n" : "[ACPI] RSDT active\n");
 
-    struct acpi_sdt_header *rsdt = (struct acpi_sdt_header *)rsdt_address;
-    if (acpi_memcmp(rsdt->signature, ACPI_RSDT_SIG, 4) != 0) {
+    uint32_t entry_size = root_is_xsdt ? sizeof(uint64_t) : sizeof(uint32_t);
+    uint32_t entries_size = root->length - sizeof(*root);
+    if (entries_size % entry_size != 0) {
         dbg_set_driver_state("acpi", DBG_DRIVER_FAILED);
         return false;
     }
-
-    uint32_t entry_count = (rsdt->length - sizeof(struct acpi_sdt_header)) / 4;
-    uint32_t *entries = (uint32_t *)((uint8_t *)rsdt + sizeof(struct acpi_sdt_header));
+    uint32_t entry_count = entries_size / entry_size;
+    const uint8_t *entries = (const uint8_t *)root + sizeof(*root);
     for (uint32_t i = 0; i < entry_count; i++) {
-        uint32_t entry = entries[i];
+        uint64_t entry = 0;
+        if (root_is_xsdt) {
+            for (uint32_t byte = 0; byte < sizeof(entry); byte++)
+                entry |= (uint64_t)entries[i * entry_size + byte] << (byte * 8);
+        } else {
+            for (uint32_t byte = 0; byte < sizeof(uint32_t); byte++)
+                entry |= (uint64_t)entries[i * entry_size + byte] << (byte * 8);
+        }
         if (!entry) continue;
 
-        struct acpi_sdt_header *table = (struct acpi_sdt_header *)entry;
-        if (acpi_memcmp(table->signature, ACPI_FACP_SIG, 4) == 0) {
-            struct acpi_facp *facp = (struct acpi_facp *)table;
-            dsdt_address = facp->dsdt;
-            if (dsdt_address != 0) {
-                acpi_available = true;
-                dbg_set_driver_state("acpi", DBG_DRIVER_ACTIVE);
-                dbg_set_pipeline_stage("acpi");
-                struct acpi_touchpad_hints hints;
-                if (acpi_scan_touchpad_hints(&hints)) {
-                    dbg_print("[ACPI] touchpad hints found\n");
-                    dbg_print("[ACPI] HID: "); dbg_print(hints.hid[0] ? hints.hid : "unknown"); dbg_print("\n");
-                    dbg_print("[ACPI] _CRS: "); dbg_print(hints.has_crs ? "yes" : "no"); dbg_print("\n");
-                    dbg_print("[ACPI] _PS0: "); dbg_print(hints.has_ps0 ? "yes" : "no"); dbg_print("\n");
-                }
-                return true;
+        const struct acpi_sdt_header *table = acpi_get_valid_sdt(entry, 0);
+        if (!table || acpi_memcmp(table->signature, ACPI_FACP_SIG, 4) != 0 ||
+            table->length < offsetof(struct acpi_facp, dsdt) + sizeof(uint32_t))
+            continue;
+
+        const struct acpi_facp *facp = (const struct acpi_facp *)table;
+        dsdt_address = facp->dsdt;
+        if (table->length >= offsetof(struct acpi_facp, x_dsdt) + sizeof(uint64_t) &&
+            facp->x_dsdt != 0 &&
+            acpi_get_valid_sdt(facp->x_dsdt, ACPI_DSDT_SIG))
+            dsdt_address = facp->x_dsdt;
+
+        if (acpi_get_valid_sdt(dsdt_address, ACPI_DSDT_SIG)) {
+            acpi_available = true;
+            dbg_set_driver_state("acpi", DBG_DRIVER_ACTIVE);
+            dbg_set_pipeline_stage("acpi");
+            struct acpi_touchpad_hints hints;
+            if (acpi_scan_touchpad_hints(&hints)) {
+                dbg_print("[ACPI] touchpad hints found\n");
+                dbg_print("[ACPI] HID: "); dbg_print(hints.hid[0] ? hints.hid : "unknown"); dbg_print("\n");
+                dbg_print("[ACPI] _CRS: "); dbg_print(hints.has_crs ? "yes" : "no"); dbg_print("\n");
+                dbg_print("[ACPI] _PS0: "); dbg_print(hints.has_ps0 ? "yes" : "no"); dbg_print("\n");
             }
+            return true;
         }
     }
 
@@ -182,11 +241,15 @@ bool acpi_init(void) {
     return false;
 }
 
-uint32_t acpi_get_rsdt_address(void) {
+uint64_t acpi_get_rsdt_address(void) {
     return rsdt_address;
 }
 
-uint32_t acpi_get_dsdt_address(void) {
+uint64_t acpi_get_xsdt_address(void) {
+    return xsdt_address;
+}
+
+uint64_t acpi_get_dsdt_address(void) {
     return dsdt_address;
 }
 

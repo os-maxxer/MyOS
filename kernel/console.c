@@ -147,6 +147,17 @@ void console_write_hex(uint32_t value) {
     console_write(buffer);
 }
 
+void console_write_hex64(uint64_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+    char buffer[17];
+    for (int i = 15; i >= 0; --i) {
+        buffer[i] = hex[value & 0xF];
+        value >>= 4;
+    }
+    buffer[16] = '\0';
+    console_write(buffer);
+}
+
 void console_write_dec(uint32_t value) {
     char buffer[11];
     int index = 10;

@@ -852,7 +852,7 @@ int net_init(void) {
     uint32_t bar = pci_get_bar(0, slot, 0, 0);
     uint16_t io_base = bar & 0xFFFC;
 
-    rtl8139_init(io_base);
+    if (rtl8139_init(io_base) != 0) return -1;
     rtl8139_get_mac(our_mac);
 
     our_ip[0] = 10; our_ip[1] = 0; our_ip[2] = 2; our_ip[3] = 15;

@@ -37,7 +37,13 @@ struct layout {
     int tz_y;
 };
 
-static int theme_count(void) { return 7; }
+struct theme_preview {
+    int id;
+    void (*draw)(int, int, int, int);
+};
+
+static const struct theme_preview theme_previews[];
+static int theme_count(void);
 
 static void clamp_scroll(int content_h, int view_h) {
     int maxs = content_h - view_h;
@@ -219,42 +225,43 @@ static void draw_preview_aurora(int x, int y, int w, int h) {
     graphics_draw_string(x + w / 2 - 20, y + h - 14, "Aurora", 0xFFFFFFFF);
 }
 
+static const struct theme_preview theme_previews[] = {
+    {GUI_THEME_SOLID, draw_preview_solid},
+    {GUI_THEME_GNOME, draw_preview_gnome},
+    {GUI_THEME_SUNSET, draw_preview_sunset},
+    {GUI_THEME_CHERRY_BLOSSOM, draw_preview_cherry},
+    {GUI_THEME_STARFIELD, draw_preview_starfield},
+    {GUI_THEME_VOXEL, draw_preview_voxel},
+    {GUI_THEME_BORED, draw_preview_bored},
+    {GUI_THEME_AURORA, draw_preview_aurora},
+};
+
+static int theme_count(void) {
+    return (int)(sizeof(theme_previews) / sizeof(theme_previews[0]));
+}
+
 static void draw_appearance_tab(const struct layout *L) {
     int x = L->cx;
     int py = L->cy + 12 - L->scroll;
     graphics_draw_string(x + 8, py, "Background Theme", 0xFFCCCCCC);
     py += 24;
 
-    struct { int id; void (*draw)(int,int,int,int); } themes[] = {
-        {GUI_THEME_SOLID, draw_preview_solid},
-        {GUI_THEME_GNOME, draw_preview_gnome},
-        {GUI_THEME_SUNSET, draw_preview_sunset},
-        {GUI_THEME_CHERRY_BLOSSOM, draw_preview_cherry},
-        {GUI_THEME_STARFIELD, draw_preview_starfield},
-    };
-    int nthemes = 5;
-    int tw = (w - 40) / nthemes;
-    if (tw > 130) tw = 130;
-    int th = tw * 3 / 4;
-    if (th > 90) th = 90;
-    int total_w = nthemes * tw + (nthemes - 1) * 10;
-    int start_x = x + (w - total_w) / 2;
-
+    int nthemes = theme_count();
     int cur = gui_get_theme();
     for (int i = 0; i < nthemes; i++) {
         int col = i % L->theme_cols, grid_row = i / L->theme_cols;
-        int cx = L->theme_start + col * (tw + 8);
-        int cy = py + grid_row * (th + 8);
-        themes[i].draw(cx, cy, tw, th);
-        if (cur == themes[i].id) {
-            graphics_draw_rect(cx-1, cy-1, tw+2, th+2, 0xFFFFFFFF);
-            graphics_draw_rect(cx-2, cy-2, tw+4, th+4, 0xFF4A90E2);
+        int cx = L->theme_start + col * (L->theme_w + 8);
+        int cy = py + grid_row * (L->theme_h + 8);
+        theme_previews[i].draw(cx, cy, L->theme_w, L->theme_h);
+        if (cur == theme_previews[i].id) {
+            graphics_draw_rect(cx-1, cy-1, L->theme_w+2, L->theme_h+2, 0xFFFFFFFF);
+            graphics_draw_rect(cx-2, cy-2, L->theme_w+4, L->theme_h+4, 0xFF4A90E2);
         } else {
-            graphics_draw_rect(cx, cy, tw, th, 0xFF666666);
+            graphics_draw_rect(cx, cy, L->theme_w, L->theme_h, 0xFF666666);
         }
     }
 
-    py += L->theme_rows * th + (L->theme_rows - 1) * 8 + 24;
+    py += L->theme_rows * L->theme_h + (L->theme_rows - 1) * 8 + 24;
     graphics_draw_string(x + 8, py, "Solid Colors", 0xFFCCCCCC);
     py += 20;
 
@@ -302,7 +309,7 @@ static void draw_system_tab(const struct layout *L) {
     graphics_draw_string(x + 80, py, ram, 0xFFCCCCCC);
     py += 22;
     graphics_draw_string(x + 12, py, "Architecture:", 0xFF888888);
-    graphics_draw_string(x + 80, py, "x86 (32-bit)", 0xFFCCCCCC);
+    graphics_draw_string(x + 80, py, "x86-64 (64-bit)", 0xFFCCCCCC);
     py += 22;
     graphics_draw_string(x + 12, py, "Storage:", 0xFF888888);
     const char *model = ata_present() ? ata_get_model() : 0;
@@ -566,27 +573,15 @@ void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y)
     compute_layout(&L, x, y, w, h);
 
     if (settings_tab == 0) {
-        int py = y + 30 + 12 + 24;
-        struct { int id; } themes[] = {{GUI_THEME_SOLID}, {GUI_THEME_GNOME}, {GUI_THEME_SUNSET}, {GUI_THEME_CHERRY_BLOSSOM}, {GUI_THEME_STARFIELD}};
-        int nthemes = 5;
-        int tw = ((w - SIDEBAR_W - 1) - 40) / nthemes;
-        if (tw > 130) tw = 130;
-        int th = tw * 3 / 4;
-        if (th > 90) th = 90;
-        int total_w = nthemes * tw + (nthemes - 1) * 10;
-        int start_x = (x + SIDEBAR_W + 1) + ((w - SIDEBAR_W - 1) - total_w) / 2;
-
+        int nthemes = theme_count();
+        int theme_y = L.theme_y - L.scroll;
         for (int i = 0; i < nthemes; i++) {
             int col = i % L.theme_cols, grid_row = i / L.theme_cols;
             int cx = L.theme_start + col * (L.theme_w + 8);
-            int cy = ty + grid_row * (L.theme_h + 8);
+            int cy = theme_y + grid_row * (L.theme_h + 8);
             if (mouse_x >= cx && mouse_x < cx + L.theme_w &&
                 mouse_y >= cy && mouse_y < cy + L.theme_h) {
-                static const int theme_ids[] = {GUI_THEME_SOLID, GUI_THEME_GNOME,
-                                                GUI_THEME_SUNSET, GUI_THEME_CHERRY_BLOSSOM,
-                                                GUI_THEME_STARFIELD, GUI_THEME_BORED,
-                                                GUI_THEME_AURORA};
-                gui_set_theme(theme_ids[i]);
+                gui_set_theme(theme_previews[i].id);
                 return;
             }
         }

@@ -1,5 +1,6 @@
 .intel_syntax noprefix
 .text
+.code64
 
 .extern isr_common_handler
 .extern irq_common_handler
@@ -51,7 +52,7 @@ isr_errcode 17
 isr_noerrcode 18
 isr_noerrcode 19
 isr_noerrcode 20
-isr_noerrcode 21
+isr_errcode 21
 isr_noerrcode 22
 isr_noerrcode 23
 isr_noerrcode 24
@@ -59,8 +60,8 @@ isr_noerrcode 25
 isr_noerrcode 26
 isr_noerrcode 27
 isr_noerrcode 28
-isr_noerrcode 29
-isr_noerrcode 30
+isr_errcode 29
+isr_errcode 30
 isr_noerrcode 31
 
 irq 0, 32
@@ -80,83 +81,93 @@ irq 13, 45
 irq 14, 46
 irq 15, 47
 
+.macro save_registers
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+.endm
+
+.macro restore_registers
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+.endm
+
 isr_common_stub:
-    pusha
-    push ds
-    push es
-    push fs
-    push gs
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov eax, esp
-    push eax
+    save_registers
+    mov r12, rsp
+    mov rdi, rsp
+    and rsp, -16
     call isr_common_handler
-    pop eax
-    pop gs
-    pop fs
-    pop es
-    pop ds
-    popa
-    add esp, 8
-    iret
+    mov rsp, r12
+    restore_registers
+    add rsp, 16
+    iretq
 
 irq_common_stub:
-    pusha
-    push ds
-    push es
-    push fs
-    push gs
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov eax, esp
-    push eax
+    save_registers
+    mov r12, rsp
+    mov rdi, rsp
+    and rsp, -16
     call irq_common_handler
-    pop eax
-    pop gs
-    pop fs
-    pop es
-    pop ds
-    popa
-    push eax
-    mov eax, [esp+4]
-    cmp eax, 40
-    jb .done
+    mov rsp, r12
+
+    cmp qword ptr [r12 + 120], 40
+    jb 1f
     mov al, 0x20
-    out 0x20, al
     out 0xA0, al
-    jmp .skip
-.done:
+1:
     mov al, 0x20
     out 0x20, al
-.skip:
-    pop eax
-    add esp, 8
-    iret
+
+    restore_registers
+    add rsp, 16
+    iretq
 
 .global load_gdt
 load_gdt:
-    mov eax, [esp+4]
-    lgdt [eax]
+    lgdt [rdi]
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    jmp 0x08:.flush
-.flush:
     ret
 
 .global load_idt
 load_idt:
-    mov eax, [esp+4]
-    lidt [eax]
+    lidt [rdi]
+    ret
+
+.global load_tss
+load_tss:
+    mov ax, 0x18
+    ltr ax
     ret
 
 .global enable_interrupts
@@ -168,3 +179,5 @@ enable_interrupts:
 disable_interrupts:
     cli
     ret
+
+.section .note.GNU-stack,"",@progbits

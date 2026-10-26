@@ -1,47 +1,41 @@
 /*
- * Global descriptor table setup for the i386 kernel.
+ * Global descriptor table setup for the x86-64 kernel.
  */
 
 #include <solis/gdt.h>
-
-struct gdt_entry {
-    uint16_t limit_low;
-    uint16_t base_low;
-    uint8_t base_middle;
-    uint8_t access;
-    uint8_t granularity;
-    uint8_t base_high;
-} __attribute__((packed));
+#include <solis/tss.h>
 
 struct gdt_ptr {
     uint16_t limit;
-    uint32_t base;
+    uint64_t base;
 } __attribute__((packed));
 
-static struct gdt_entry gdt[3];
+static uint64_t gdt[5];
 static struct gdt_ptr gp;
 
-extern void load_gdt(uint32_t gdt_ptr);
+extern void load_gdt(const struct gdt_ptr *gdt_ptr);
+extern void load_tss(void);
 
-static void gdt_set_gate(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
-    gdt[index].base_low = (base & 0xFFFF);
-    gdt[index].base_middle = (base >> 16) & 0xFF;
-    gdt[index].base_high = (base >> 24) & 0xFF;
-
-    gdt[index].limit_low = (limit & 0xFFFF);
-    gdt[index].granularity = (limit >> 16) & 0x0F;
-    gdt[index].granularity |= gran & 0xF0;
-
-    gdt[index].access = access;
+static void gdt_set_tss(uint64_t base, uint32_t limit) {
+    gdt[3] = (limit & 0xFFFFU) |
+             ((base & 0xFFFFFFULL) << 16) |
+             (0x89ULL << 40) |
+             (((uint64_t)(limit >> 16) & 0x0FULL) << 48) |
+             (((base >> 24) & 0xFFULL) << 56);
+    gdt[4] = base >> 32;
 }
 
 void gdt_init(void) {
+    tss_init();
+    const struct x86_64_tss *tss = tss_get();
+
+    gdt[0] = 0;
+    gdt[1] = 0x00AF9A000000FFFFULL;
+    gdt[2] = 0x00CF92000000FFFFULL;
+    gdt_set_tss((uintptr_t)tss, sizeof(*tss) - 1);
     gp.limit = (sizeof(gdt) - 1);
-    gp.base = (uint32_t)&gdt;
+    gp.base = (uint64_t)(uintptr_t)&gdt;
 
-    gdt_set_gate(0, 0, 0, 0, 0);
-    gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
-    gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
-
-    load_gdt((uint32_t)&gp);
+    load_gdt(&gp);
+    load_tss();
 }

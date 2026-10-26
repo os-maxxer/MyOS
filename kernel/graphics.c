@@ -94,7 +94,7 @@ static inline void framebuffer_put32(uint32_t x, uint32_t y, uint32_t color) {
     *(volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch + x * 4) = color;
 }
 
-static void *get_multiboot_tag(uint32_t multiboot_info, uint32_t type) {
+static void *get_multiboot_tag(uintptr_t multiboot_info, uint32_t type) {
     uint32_t *info = (uint32_t *)multiboot_info;
     if (info == 0) {
         return 0;
@@ -116,7 +116,7 @@ static void *get_multiboot_tag(uint32_t multiboot_info, uint32_t type) {
     return 0;
 }
 
-void graphics_init(uint32_t multiboot_info) {
+void graphics_init(uintptr_t multiboot_info) {
     struct multiboot_tag_framebuffer *framebuffer_tag = (struct multiboot_tag_framebuffer *)get_multiboot_tag(multiboot_info, 8);
     if (framebuffer_tag == 0 || framebuffer_tag->common.framebuffer_addr == 0) {
         framebuffer.present = false;
@@ -141,7 +141,7 @@ void graphics_init(uint32_t multiboot_info) {
     clip_init();
 
     console_write("[FB] addr=");
-    console_write_hex((uint32_t)(uintptr_t)framebuffer.address);
+    console_write_hex64((uint64_t)(uintptr_t)framebuffer.address);
     console_write(" w=");
     console_write_dec(framebuffer.width);
     console_write(" h=");
