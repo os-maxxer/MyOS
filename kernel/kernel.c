@@ -21,6 +21,7 @@
 #include <solis/acpi.h>
 #include <solis/pmm.h>
 #include <solis/vmm.h>
+#include <solis/usermode.h>
 
 extern char _binary_build_spx_terminal_spx_start[];
 extern char _binary_build_spx_terminal_spx_end[];
@@ -71,6 +72,7 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
 
     gdt_init();
     idt_init();
+    usermode_run_self_test();
     pic_remap();
     graphics_init(multiboot_info);
     graphics_vbe_init();

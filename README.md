@@ -152,17 +152,19 @@ discovery prefers 64-bit XSDT/FADT addresses with legacy RSDT fallback.
 The kernel now has a Multiboot memory-map-based physical page allocator and
 4 KiB virtual mapping/protection primitives. Kernel text is read-only, and
 read-only data and writable data sections are non-executable when the CPU
-supports NX. The current virtual-memory manager operates on one shared kernel
-address space; Solis does not yet have per-process address spaces, user mode,
-or kernel/user isolation. Physical memory above the 512 GiB boot identity map
-is not directly accessible or allocatable.
+supports NX. The kernel has an experimental ring-3 entry path, separate user
+page-table roots with supervisor-only kernel mappings, and minimal `int 0x80`
+write/exit services with user-pointer validation. Boot runs a small user-mode
+self-test. The desktop's SPX applications still execute in kernel mode; there
+is not yet a scheduler,
+production process loader, or general-purpose syscall ABI. Physical memory
+above the 512 GiB boot identity map is not directly accessible or allocatable.
 
 The 64-bit GDT includes a TSS with a dedicated ring-0 stack and independent
 IST stacks for double faults, NMIs, and machine checks. Unused IDT vectors are
 left absent, and CPU exceptions report the faulting instruction and, for page
 faults, CR2 and access details before halting. The boot stub checks for long
-mode and PAE before entering 64-bit mode. This improves kernel fault handling,
-but does not yet provide a user-mode execution or process-isolation boundary.
+mode and PAE before entering 64-bit mode.
 
 ## Requirements (for building)
 

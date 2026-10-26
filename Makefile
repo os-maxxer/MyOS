@@ -27,6 +27,8 @@ OBJS := \
 	$(BUILD_DIR)/kernel/kernel.o \
 	$(BUILD_DIR)/kernel/pmm.o \
 	$(BUILD_DIR)/kernel/vmm.o \
+	$(BUILD_DIR)/kernel/user_elf.o \
+	$(BUILD_DIR)/kernel/usermode.o \
 	$(BUILD_DIR)/kernel/console.o \
 	$(BUILD_DIR)/kernel/gdt.o \
 	$(BUILD_DIR)/kernel/tss.o \
@@ -56,7 +58,9 @@ OBJS := \
 	$(BUILD_DIR)/gui/login.o \
 	$(BUILD_DIR)/window_manager/window_manager.o \
 	$(BUILD_DIR)/desktop/desktop.o \
-	$(BUILD_DIR)/kernel/arch/x86_64/interrupts.o
+	$(BUILD_DIR)/kernel/arch/x86_64/interrupts.o \
+	$(BUILD_DIR)/kernel/arch/x86_64/usermode_entry.o \
+	$(BUILD_DIR)/user_test_embed.o
 
 SPX_EMBED_OBJS := \
 	$(SPX_DIR)/terminal_spx_embed.o \
@@ -91,6 +95,12 @@ $(BUILD_DIR)/kernel/pmm.o: $(KERNEL_DIR)/pmm.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/vmm.o: $(KERNEL_DIR)/vmm.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/usermode.o: $(KERNEL_DIR)/usermode.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/user_elf.o: $(KERNEL_DIR)/user_elf.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/console.o: $(KERNEL_DIR)/console.c | $(BUILD_DIR)
@@ -182,6 +192,19 @@ $(BUILD_DIR)/desktop/desktop.o: $(DESKTOP_DIR)/desktop.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/kernel/arch/x86_64/interrupts.o: $(KERNEL_DIR)/arch/x86_64/interrupts.asm | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) -o $@ $<
+
+$(BUILD_DIR)/kernel/arch/x86_64/usermode_entry.o: $(KERNEL_DIR)/arch/x86_64/usermode.asm | $(BUILD_DIR)
+	$(AS) $(ASFLAGS) -o $@ $<
+
+# Minimal statically linked ELF64 program used to exercise ring-3 loading.
+$(BUILD_DIR)/user_test.o: tests/user/user_test.asm | $(BUILD_DIR)
+	$(AS) $(ASFLAGS) -o $@ $<
+
+$(BUILD_DIR)/user_test.elf: $(BUILD_DIR)/user_test.o tests/user/user_test.ld
+	$(LD) -m elf_x86_64 -T tests/user/user_test.ld -nostdlib -z noexecstack -o $@ $<
+
+$(BUILD_DIR)/user_test_embed.o: $(BUILD_DIR)/user_test.elf
+	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $< $@
 
 # SPX app build rules
 # Each app is compiled as a standalone binary, wrapped in SPX header, and embedded in the kernel

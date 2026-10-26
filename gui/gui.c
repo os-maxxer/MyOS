@@ -25,7 +25,7 @@
 /* Layout                                                              */
 /* ------------------------------------------------------------------ */
 #define MAX_WINDOWS   8
-#define TITLEBAR_H    24
+#define TITLEBAR_H    28
 #define WIN_BORDER    1
 #define BTN_W         22          /* window control button width  */
 #define RESIZE_MARGIN 5
@@ -44,10 +44,10 @@
 
 /* Taskbar card geometry. PANEL_H is the strip of screen the taskbar
  * reserves at the bottom, so windows never end up underneath it. */
-#define TASKBAR_H        46
-#define TASKBAR_MARGIN    8
-#define TASKBAR_SIDE     10
-#define TASKBAR_RADIUS   12
+#define TASKBAR_H        54
+#define TASKBAR_MARGIN   10
+#define TASKBAR_SIDE     18
+#define TASKBAR_RADIUS   16
 #define PANEL_H          (TASKBAR_H + TASKBAR_MARGIN)
 #define PIN_COUNT        9
 #define PIN_W            30
@@ -56,26 +56,26 @@
 #define MIN_TASK_W       70
 #define MAX_TASK_W       150
 #define TASK_GAP         4
-#define LAUNCH_SZ        34
-#define CARD_PAD         7
+#define LAUNCH_SZ        38
+#define CARD_PAD         8
 #define ITEM_RADIUS      7
 
 /* ------------------------------------------------------------------ */
 /* Palette (BoredOS-inspired, ~14 colors)                              */
 /* ------------------------------------------------------------------ */
-#define C_BG          0xFF2C2F33  /* desktop background (dark slate) */
-#define C_PANEL       0xFF24272B  /* panel / menu background         */
-#define C_PANEL_LINE  0xFF1B1E22  /* panel bevel / border            */
-#define C_ACTIVE      0xFF4C7BD9  /* industrial blue (accent)        */
-#define C_ACTIVE_DK   0xFF3A63B3  /* accent, pressed/darker          */
-#define C_INACTIVE    0xFF3B4048  /* inactive window titlebar        */
-#define C_INACTIVE_DK 0xFF2E3238  /* inactive border                 */
-#define C_WIN_BG      0xFF202225  /* window body                     */
-#define C_TEXT        0xFFEAEAEA  /* primary text                    */
-#define C_TEXT_DIM    0xFF888888  /* secondary text / disabled       */
-#define C_BTN         0xFF3B4048  /* flat button fill                */
-#define C_BTN_HOVER   0xFF474D56  /* flat button hover               */
-#define C_BTN_PRESS   0xFF2F3338  /* flat button pressed             */
+#define C_BG          0xFF111522
+#define C_PANEL       0xFF191C28
+#define C_PANEL_LINE  0xFF34384A
+#define C_ACTIVE      0xFF8170F5
+#define C_ACTIVE_DK   0xFF6254D6
+#define C_INACTIVE    0xFF292D3A
+#define C_INACTIVE_DK 0xFF20232E
+#define C_WIN_BG      0xFF191B25
+#define C_TEXT        0xFFF4F2FA
+#define C_TEXT_DIM    0xFFAAAABD
+#define C_BTN         0xFF252936
+#define C_BTN_HOVER   0xFF34394A
+#define C_BTN_PRESS   0xFF20232F
 #define C_ERROR       0xFFD9534F
 #define C_OK          0xFF5CB85C
 #define C_AMBER       0xFFD9A441
@@ -122,7 +122,7 @@ static int  hover_pin = -1;
 
 static bool logout_requested = false;
 
-static int gui_theme = GUI_THEME_SOLID;
+static int gui_theme = GUI_THEME_AURORA;
 static uint32_t bg_color = C_BG;
 
 /* The procedural desktop backdrops are expensive, so they (plus the desktop
@@ -257,6 +257,12 @@ static const struct {
     {"Blocks",        9, 0xFF9BCF9E},
 };
 
+static const struct { int x; int y; } desktop_icon_positions[7] = {
+    {28, 60}, {116, 60}, {204, 60}, {292, 60},
+    {28, 160}, {116, 160}, {204, 160},
+};
+static const int desktop_icon_slots[7] = {0, 1, 2, 3, 4, 7, 8};
+
 static void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
 
 static int icon_coord(int x, int size) {
@@ -304,8 +310,13 @@ static void draw_app_glyph(int x, int y, int size, int slot) {
     if (slot < 0 || slot >= 10) return;
     uint32_t fg = 0xFFFFFFFF;
     uint32_t detail = 0xFFE9F0FA;
+    graphics_fill_rounded_rect(x + 1, y + 2, size, size, size / 5,
+                               0xFF080A12);
     graphics_fill_rounded_rect(x, y, size, size, size / 5, app_icons[slot].color);
-    graphics_draw_rounded_rect(x, y, size, size, size / 5, 0xFF202838);
+    graphics_fill_rounded_rect(x + size / 8, y + size / 10,
+                               size * 3 / 4, size / 12, size / 24,
+                               0x36FFFFFF);
+    graphics_draw_rounded_rect(x, y, size, size, size / 5, 0x77565D76);
 
     switch (app_icons[slot].kind) {
         case 0:
@@ -556,17 +567,18 @@ static void gui_draw_window(struct gui_window *w) {
     int ww = w->bounds.width, hh = w->bounds.height;
 
     uint32_t bar    = w->focused ? C_ACTIVE : C_INACTIVE;
-    uint32_t bar_top = w->focused ? 0xFF6FB6FF : 0xFF212C3A;
+    uint32_t bar_top = w->focused ? 0xFF8C80FF : 0xFF373B4D;
     uint32_t border = w->focused ? C_ACTIVE_DK : C_INACTIVE_DK;
     uint32_t tcol   = w->focused ? 0xFFFFFFFF : 0xFFB4B8BF;
 
     /* soft shadow under the window */
     gui_draw_window_shadow(x, y, ww, hh);
 
-    /* body */
-    graphics_fill_rect(x, y, ww, hh, C_WIN_BG);
+    /* Rounded outer shell keeps the window visually distinct from the desktop. */
+    graphics_fill_rounded_rect(x, y, ww, hh, 10, C_WIN_BG);
     /* titlebar: subtle vertical gradient for a little depth */
-    graphics_fill_gradient_v(x, y, ww, TITLEBAR_H, bar_top, bar);
+    graphics_fill_gradient_v(x + 1, y + 1, ww - 2, TITLEBAR_H - 1, bar_top, bar);
+    graphics_fill_rect(x + 10, y + 1, ww - 20, 1, 0xFFAAA1FF);
     /* 1px border all around */
     graphics_draw_rect(x, y, ww, hh, border);
 
@@ -674,17 +686,38 @@ static void draw_bored_bg(void) {
 static void draw_aurora_bg(void) {
     int w = (int)graphics_get_width();
     int h = (int)graphics_get_height();
-    graphics_fill_gradient_v(0, 0, (uint32_t)w, (uint32_t)h, 0xFF122334, 0xFF151629);
-    fill_facet_triangle(0, h * 72 / 100, w * 30 / 100, h * 34 / 100,
-                        w * 58 / 100, h, 0xFF176B69);
-    fill_facet_triangle(w * 16 / 100, h, w * 44 / 100, h * 38 / 100,
-                        w * 82 / 100, h, 0xFF245787);
-    fill_facet_triangle(w * 46 / 100, h, w * 73 / 100, h * 27 / 100,
-                        w, h * 68 / 100, 0xFF4A3B72);
-    for (int r = 130; r > 0; r -= 4)
-        graphics_fill_circle(w * 3 / 5, h * 2 / 5, r,
-                             lerp_color(0xFF58D6B0, 0xFF16283B, r, 130));
-    graphics_fill_circle(w * 3 / 5, h * 2 / 5, 26, 0xFFC9F7E9);
+    graphics_fill_gradient_v(0, 0, (uint32_t)w, (uint32_t)h,
+                             0xFF07111F, 0xFF17172D);
+
+    uint32_t seed = 0x51A15U;
+    for (int i = 0; i < 72; i++) {
+        seed = seed * 1664525U + 1013904223U;
+        int sx = (int)((seed >> 8) % (uint32_t)w);
+        seed = seed * 1664525U + 1013904223U;
+        int sy = (int)((seed >> 8) % (uint32_t)(h * 68 / 100));
+        uint32_t color = (seed & 7) == 0 ? 0xFFE0E5FF : 0xFF8495B5;
+        graphics_put_pixel((uint32_t)sx, (uint32_t)sy, color);
+    }
+
+    for (int r = h / 3; r > 8; r -= 4)
+        graphics_fill_circle(w * 58 / 100, h * 31 / 100, r,
+                             lerp_color(0xFF3ABFA3, 0xFF07111F,
+                                        r, h / 3));
+    for (int r = h / 4; r > 8; r -= 4)
+        graphics_fill_circle(w * 82 / 100, h * 46 / 100, r,
+                             lerp_color(0xFF7667D8, 0xFF11172B,
+                                        r, h / 4));
+
+    fill_facet_triangle(0, h * 72 / 100, w * 20 / 100, h * 28 / 100,
+                        w * 54 / 100, h * 74 / 100, 0xFF123B4C);
+    fill_facet_triangle(w * 5 / 100, h * 86 / 100, w * 37 / 100, h * 34 / 100,
+                        w * 70 / 100, h * 80 / 100, 0xFF176354);
+    fill_facet_triangle(w * 32 / 100, h * 91 / 100, w * 63 / 100, h * 35 / 100,
+                        w * 100 / 100, h * 76 / 100, 0xFF244764);
+    fill_facet_triangle(0, h * 92 / 100, w * 42 / 100, h * 71 / 100,
+                        w * 79 / 100, h, 0xFF111A2B);
+    fill_facet_triangle(w * 47 / 100, h * 83 / 100, w * 77 / 100, h * 64 / 100,
+                        w, h * 91 / 100, 0xFF1A2034);
 }
 
 static void draw_gnome_bg(void) {
@@ -954,17 +987,18 @@ static void draw_voxel_bg(void) {
 }
 
 static void draw_desktop_icons(void) {
-    struct { int x; int y; } pos[7] = {
-        {28, 60}, {116, 60}, {204, 60}, {292, 60},
-        {28, 160}, {116, 160}, {204, 160},
-    };
-    int slots[7] = {0, 1, 2, 3, 4, 7, 8};
     for (int i = 0; i < 7; i++) {
-        int slot = slots[i];
-        draw_app_glyph(pos[i].x, pos[i].y, 56, slot);
+        int slot = desktop_icon_slots[i];
+        int x = desktop_icon_positions[i].x;
+        int y = desktop_icon_positions[i].y;
+        draw_app_glyph(x, y, 56, slot);
         int len = 0;
         for (const char *p = app_icons[slot].name; *p; p++) len++;
-        graphics_draw_string(pos[i].x + (56 - len * 8) / 2, pos[i].y + 60, app_icons[slot].name, 0xFFC8C8D4);
+        int label_x = x + (56 - len * 8) / 2;
+        int label_w = len * 8 + 12;
+        graphics_fill_rounded_rect(label_x - 6, y + 59, label_w, 20, 6,
+                                   0xFF303545);
+        graphics_draw_string(label_x, y + 61, app_icons[slot].name, 0xFFF2F1F7);
     }
 
     if (gui_theme == GUI_THEME_VOXEL) draw_voxel_system_tile();
@@ -1304,7 +1338,9 @@ static void gui_draw_panel(void) {
     graphics_fill_rounded_rect(L.card_x, L.card_y, L.card_w, L.card_h,
                                TASKBAR_RADIUS, C_PANEL);
     graphics_fill_rect(L.card_x + TASKBAR_RADIUS, L.card_y + 1,
-                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF1B2B3E);
+                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF5B5875);
+    graphics_fill_rect(L.card_x + TASKBAR_RADIUS, L.card_y + 2,
+                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF282B3A);
     graphics_draw_rounded_rect(L.card_x, L.card_y, L.card_w, L.card_h,
                                TASKBAR_RADIUS, C_PANEL_LINE);
 
@@ -1405,7 +1441,8 @@ static void gui_draw_start_menu(void) {
     menu_geom(&x, &y, &w, &h);
 
     /* brand header */
-    graphics_fill_rect(x, y, w, MENU_HEADER_H, C_ACTIVE);
+    graphics_fill_gradient_v(x + 1, y + 1, w - 2, MENU_HEADER_H,
+                             0xFF8C80FF, C_ACTIVE_DK);
     graphics_draw_string(x + 8, y + (MENU_HEADER_H - 16) / 2, "Solis OS", 0xFFFFFFFF);
 
     /* body */
@@ -2176,6 +2213,16 @@ static bool pt_in_rect(int px, int py, const struct gui_rect *r) {
     return px >= r->x && px < r->x + r->width && py >= r->y && py < r->y + r->height;
 }
 
+static int desktop_icon_at(int x, int y) {
+    for (int i = 0; i < 7; i++) {
+        int left = desktop_icon_positions[i].x - 8;
+        int top = desktop_icon_positions[i].y - 8;
+        if (x >= left && x < left + 72 && y >= top && y < top + 90)
+            return desktop_icon_slots[i];
+    }
+    return -1;
+}
+
 void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     bool left_down = buttons & 0x01;
     bool left_click = left_down && !gui_mouse_prev_left;
@@ -2382,6 +2429,19 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
         }
         mouse_buttons = buttons;
         return;
+    }
+
+    if (mouse_y < py) {
+        int slot = desktop_icon_at(mouse_x, mouse_y);
+        if (slot >= 0) {
+            console_write("[GUI] desktop launch: ");
+            console_write(app_icons[slot].name);
+            console_write("\n");
+            if (gui_launch_app(slot) < 0)
+                console_write("[GUI] No free window slot for desktop app\n");
+            mouse_buttons = buttons;
+            return;
+        }
     }
 
     /* taskbar */

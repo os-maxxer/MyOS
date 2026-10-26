@@ -10,7 +10,7 @@ struct gdt_ptr {
     uint64_t base;
 } __attribute__((packed));
 
-static uint64_t gdt[5];
+static uint64_t gdt[7];
 static struct gdt_ptr gp;
 
 extern void load_gdt(const struct gdt_ptr *gdt_ptr);
@@ -33,6 +33,8 @@ void gdt_init(void) {
     gdt[1] = 0x00AF9A000000FFFFULL;
     gdt[2] = 0x00CF92000000FFFFULL;
     gdt_set_tss((uintptr_t)tss, sizeof(*tss) - 1);
+    gdt[5] = 0x00AFFA000000FFFFULL;
+    gdt[6] = 0x00CFF2000000FFFFULL;
     gp.limit = (sizeof(gdt) - 1);
     gp.base = (uint64_t)(uintptr_t)&gdt;
 

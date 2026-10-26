@@ -63,6 +63,7 @@ isr_noerrcode 28
 isr_errcode 29
 isr_errcode 30
 isr_noerrcode 31
+isr_noerrcode 128
 
 irq 0, 32
 irq 1, 33

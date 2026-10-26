@@ -27,6 +27,7 @@
                            VMM_PAGE_GLOBAL | VMM_PAGE_NO_EXECUTE)
 
 static uint64_t *page_root;
+static uint64_t *kernel_page_root;
 static uint64_t physical_address_mask = ENTRY_ADDRESS_MASK;
 static bool nx_supported;
 
@@ -60,6 +61,10 @@ static bool vmm_valid_range(uint64_t start, uint64_t end) {
         !vmm_is_canonical(end - 1))
         return false;
     return ((start >> 47) & 1) == (((end - 1) >> 47) & 1);
+}
+
+static bool vmm_valid_user_address(uint64_t address) {
+    return address >= VMM_USER_SPACE_START && address < VMM_USER_SPACE_END;
 }
 
 static bool vmm_valid_physical(uint64_t address) {
@@ -215,6 +220,7 @@ bool vmm_init(void) {
     if ((root_address & PAGE_MASK) != 0 || root_address >= VMM_IDENTITY_LIMIT)
         return false;
     page_root = (uint64_t *)(uintptr_t)root_address;
+    kernel_page_root = page_root;
 
     uint64_t nx = nx_supported ? VMM_PAGE_NO_EXECUTE : 0;
     if (!vmm_protect_range((uintptr_t)__text_start, (uintptr_t)__text_end, 0) ||
@@ -269,11 +275,16 @@ bool vmm_init(void) {
     return true;
 }
 
+bool vmm_nx_enabled(void) {
+    return nx_supported;
+}
+
 bool vmm_map_page(uintptr_t virtual_address, uint64_t physical_address, uint64_t flags) {
     if (!page_root || (virtual_address & PAGE_MASK) != 0 ||
         !vmm_is_canonical(virtual_address) || !vmm_valid_physical(physical_address) ||
         (flags & ~VMM_ALLOWED_FLAGS) != 0 ||
-        ((flags & VMM_PAGE_USER) && ((uint64_t)virtual_address >> 47) != 0) ||
+        ((flags & VMM_PAGE_USER) && !vmm_valid_user_address(virtual_address)) ||
+        ((flags & VMM_PAGE_USER) && page_root == kernel_page_root) ||
         ((flags & VMM_PAGE_NO_EXECUTE) && !nx_supported))
         return false;
 
@@ -281,6 +292,132 @@ bool vmm_map_page(uintptr_t virtual_address, uint64_t physical_address, uint64_t
     if (!pte) return false;
     *pte = physical_address | (flags & VMM_ALLOWED_FLAGS) | ENTRY_PRESENT;
     vmm_invalidate(virtual_address);
+    return true;
+}
+
+bool vmm_address_space_create(struct vmm_address_space *space) {
+    if (!space || !kernel_page_root || space->root) return false;
+    uint64_t *root = (uint64_t *)pmm_alloc_page();
+    if (!root) return false;
+
+    for (uint32_t i = 0; i < ENTRY_COUNT; i++) {
+        if (i >= (VMM_USER_SPACE_START >> 39) && i < 256) continue;
+        if ((kernel_page_root[i] & (ENTRY_PRESENT | ENTRY_USER)) ==
+            (ENTRY_PRESENT | ENTRY_USER)) {
+            pmm_free_page(root);
+            return false;
+        }
+        root[i] = kernel_page_root[i];
+    }
+    space->root = root;
+    return true;
+}
+
+bool vmm_address_space_activate(struct vmm_address_space *space) {
+    if (!space || !space->root) return false;
+    uint64_t root_address = (uintptr_t)space->root;
+    if (!vmm_valid_physical(root_address)) return false;
+    page_root = space->root;
+    __asm__ volatile("mov %0, %%cr3" : : "r"(root_address) : "memory");
+    return true;
+}
+
+void vmm_activate_kernel(void) {
+    if (!kernel_page_root) return;
+    uint64_t root_address = (uintptr_t)kernel_page_root;
+    page_root = kernel_page_root;
+    __asm__ volatile("mov %0, %%cr3" : : "r"(root_address) : "memory");
+}
+
+void *vmm_address_space_map_alloc(struct vmm_address_space *space,
+                                  uintptr_t virtual_address, uint64_t flags) {
+    if (!space || !space->root ||
+        (virtual_address & PAGE_MASK) != 0 ||
+        !vmm_valid_user_address(virtual_address) ||
+        !(flags & VMM_PAGE_USER) || (flags & ~VMM_ALLOWED_FLAGS) != 0 ||
+        ((flags & VMM_PAGE_NO_EXECUTE) && !nx_supported))
+        return 0;
+
+    void *page = pmm_alloc_page();
+    if (!page) return 0;
+
+    uint64_t *previous_root = page_root;
+    page_root = space->root;
+    uint64_t *pte = vmm_get_leaf(virtual_address, true, true);
+    bool mapped = pte && !(*pte & ENTRY_PRESENT);
+    if (mapped)
+        *pte = ((uint64_t)(uintptr_t)page & physical_address_mask) |
+               (flags & VMM_ALLOWED_FLAGS) | ENTRY_PRESENT;
+    page_root = previous_root;
+    if (!mapped) {
+        pmm_free_page(page);
+        return 0;
+    }
+    if (previous_root == space->root) vmm_invalidate(virtual_address);
+    return page;
+}
+
+static bool vmm_free_user_tables(uint64_t *pml4) {
+    for (uint32_t i = (uint32_t)(VMM_USER_SPACE_START >> 39); i < 256; i++) {
+        if (!(pml4[i] & ENTRY_PRESENT)) continue;
+        uint64_t *pdpt = vmm_table_from_entry(pml4[i]);
+        if (!pdpt) return false;
+
+        for (uint32_t j = 0; j < ENTRY_COUNT; j++) {
+            if (!(pdpt[j] & ENTRY_PRESENT)) continue;
+            if (pdpt[j] & ENTRY_LARGE) return false;
+            uint64_t *pd = vmm_table_from_entry(pdpt[j]);
+            if (!pd) return false;
+
+            for (uint32_t k = 0; k < ENTRY_COUNT; k++) {
+                if (!(pd[k] & ENTRY_PRESENT)) continue;
+                if (pd[k] & ENTRY_LARGE) return false;
+                uint64_t *pt = vmm_table_from_entry(pd[k]);
+                if (!pt) return false;
+
+                for (uint32_t n = 0; n < ENTRY_COUNT; n++) {
+                    if (!(pt[n] & ENTRY_PRESENT)) continue;
+                    uint64_t physical = pt[n] & physical_address_mask;
+                    uint64_t entry = pt[n];
+                    pt[n] = 0;
+                    if (!pmm_free_page((void *)(uintptr_t)physical)) {
+                        pt[n] = entry;
+                        return false;
+                    }
+                }
+
+                uint64_t pt_entry = pd[k];
+                pd[k] = 0;
+                if (!pmm_free_page(pt)) {
+                    pd[k] = pt_entry;
+                    return false;
+                }
+            }
+
+            uint64_t pd_entry = pdpt[j];
+            pdpt[j] = 0;
+            if (!pmm_free_page(pd)) {
+                pdpt[j] = pd_entry;
+                return false;
+            }
+        }
+
+        uint64_t pdpt_entry = pml4[i];
+        pml4[i] = 0;
+        if (!pmm_free_page(pdpt)) {
+            pml4[i] = pdpt_entry;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool vmm_address_space_destroy(struct vmm_address_space *space) {
+    if (!space || !space->root || space->root == page_root ||
+        !vmm_free_user_tables(space->root))
+        return false;
+    if (!pmm_free_page(space->root)) return false;
+    space->root = 0;
     return true;
 }
 
@@ -332,8 +469,69 @@ bool vmm_translate(uintptr_t virtual_address, uint64_t *physical_address) {
     return true;
 }
 
+static bool vmm_user_translate(uintptr_t virtual_address,
+                               uint64_t *physical_address) {
+    if (!page_root || !physical_address ||
+        !vmm_valid_user_address(virtual_address))
+        return false;
+
+    uint64_t entry = page_root[(virtual_address >> 39) & 0x1FF];
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
+        (ENTRY_PRESENT | ENTRY_USER))
+        return false;
+    uint64_t *table = vmm_table_from_entry(entry);
+    if (!table) return false;
+    entry = table[(virtual_address >> 30) & 0x1FF];
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
+        (ENTRY_PRESENT | ENTRY_USER) || (entry & ENTRY_LARGE))
+        return false;
+
+    table = vmm_table_from_entry(entry);
+    if (!table) return false;
+    entry = table[(virtual_address >> 21) & 0x1FF];
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
+        (ENTRY_PRESENT | ENTRY_USER) || (entry & ENTRY_LARGE))
+        return false;
+
+    table = vmm_table_from_entry(entry);
+    if (!table) return false;
+    entry = table[(virtual_address >> 12) & 0x1FF];
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
+        (ENTRY_PRESENT | ENTRY_USER))
+        return false;
+    *physical_address = (entry & physical_address_mask) |
+                        (virtual_address & PAGE_MASK);
+    return true;
+}
+
+bool vmm_copy_from_user(void *destination, uintptr_t source, size_t size) {
+    if ((!destination && size) ||
+        (size && (!vmm_valid_user_address(source) ||
+                  size > VMM_USER_SPACE_END - source)))
+        return false;
+
+    uint8_t *output = (uint8_t *)destination;
+    while (size) {
+        uint64_t physical_address;
+        if (!vmm_user_translate(source, &physical_address) ||
+            physical_address >= VMM_IDENTITY_LIMIT)
+            return false;
+        size_t chunk = PMM_PAGE_SIZE -
+                       (size_t)(source & (PMM_PAGE_SIZE - 1));
+        if (chunk > size) chunk = size;
+        const uint8_t *input = (const uint8_t *)(uintptr_t)physical_address;
+        for (size_t i = 0; i < chunk; i++)
+            output[i] = input[i];
+        output += chunk;
+        source += chunk;
+        size -= chunk;
+    }
+    return true;
+}
+
 bool vmm_protect_range(uintptr_t start, uintptr_t end, uint64_t flags) {
     if (start > end || (flags & ~VMM_ALLOWED_FLAGS) != 0 ||
+        (flags & VMM_PAGE_USER) != 0 ||
         ((flags & VMM_PAGE_NO_EXECUTE) && !nx_supported))
         return false;
     if (start == end) return true;

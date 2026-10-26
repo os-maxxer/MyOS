@@ -6,6 +6,8 @@
 #include <solis/console.h>
 #include <solis/interrupts.h>
 #include <solis/dbg.h>
+#include <solis/vmm.h>
+#include <solis/usermode.h>
 
 struct idt_entry {
     uint16_t base_low;
@@ -58,6 +60,7 @@ extern void isr28(void);
 extern void isr29(void);
 extern void isr30(void);
 extern void isr31(void);
+extern void isr128(void);
 extern void irq0(void);
 extern void irq1(void);
 extern void irq2(void);
@@ -130,6 +133,7 @@ void idt_init(void) {
     idt_set_gate(29, (uintptr_t)isr29, 0x08, 0x8E);
     idt_set_gate(30, (uintptr_t)isr30, 0x08, 0x8E);
     idt_set_gate(31, (uintptr_t)isr31, 0x08, 0x8E);
+    idt_set_gate(128, (uintptr_t)isr128, 0x08, 0xEE);
     idt_set_ist_gate(2, (uintptr_t)isr2, 2);
     idt_set_ist_gate(8, (uintptr_t)isr8, 1);
     idt_set_ist_gate(18, (uintptr_t)isr18, 3);
@@ -157,6 +161,7 @@ void idt_init(void) {
 static void (*irq_handlers[16])(void) = {0};
 
 extern void kernel_panic(const char *message) __attribute__((noreturn));
+extern void arch_exit_user(uint64_t status) __attribute__((noreturn));
 
 static const char *exception_name(uint64_t vector) {
     static const char *const names[32] = {
@@ -187,6 +192,28 @@ void irq_register_handler(uint8_t irq, void (*handler)(void)) {
 
 void isr_common_handler(struct registers *regs) {
     if (regs->int_no == 3) return;
+    if (regs->int_no == 128) {
+        if ((regs->cs & 3) != 3) {
+            regs->rax = UINT64_MAX;
+            return;
+        }
+        if (regs->rax == SOLIS_SYSCALL_EXIT)
+            arch_exit_user(regs->rdi);
+        if (regs->rax == SOLIS_SYSCALL_WRITE) {
+            char buffer[SOLIS_SYSCALL_MAX_WRITE];
+            if (regs->rsi > sizeof(buffer) ||
+                !vmm_copy_from_user(buffer, regs->rdi, regs->rsi)) {
+                regs->rax = UINT64_MAX;
+                return;
+            }
+            for (uint64_t i = 0; i < regs->rsi; i++)
+                console_putc(buffer[i]);
+            regs->rax = regs->rsi;
+            return;
+        }
+        regs->rax = UINT64_MAX;
+        return;
+    }
 
     console_write("[FAULT] ");
     console_write(exception_name(regs->int_no));
