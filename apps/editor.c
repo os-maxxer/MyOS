@@ -12,6 +12,7 @@
 #define MAX_FILES 32
 #define MAX_FNAME 24
 #define TAB_W 2
+#define UNDO_DEPTH 8
 
 enum lang_mode { LANG_C, LANG_LUA, LANG_ASM };
 
@@ -23,6 +24,15 @@ static enum lang_mode lang = LANG_C;
 static char cur_file[MAX_FNAME];
 static char status_msg[40];
 static int status_ticks = 0;
+
+static char undo_buffer[UNDO_DEPTH][EDIT_BUF];
+static int undo_rows[UNDO_DEPTH];
+static int undo_cols[UNDO_DEPTH];
+static int undo_tops[UNDO_DEPTH];
+static int undo_count = 0;
+static int undo_head = 0;
+static int goto_mode = 0;
+static int goto_line = 0;
 
 static int str_eq(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
@@ -114,11 +124,44 @@ static int is_keyword(const char *word, const char **kw_list) {
     return 0;
 }
 
+static void undo_reset(void) {
+    undo_count = 0;
+    undo_head = 0;
+}
+
+static void editor_push_undo(void) {
+    int slot = undo_head;
+    for (int i = 0; i < EDIT_BUF; i++)
+        undo_buffer[slot][i] = buffer[i];
+    undo_rows[slot] = row;
+    undo_cols[slot] = col;
+    undo_tops[slot] = top_row;
+    undo_head = (undo_head + 1) % UNDO_DEPTH;
+    if (undo_count < UNDO_DEPTH) undo_count++;
+}
+
+static void editor_undo(void) {
+    if (undo_count == 0) {
+        set_status("Nothing to undo");
+        return;
+    }
+    int slot = (undo_head + UNDO_DEPTH - 1) % UNDO_DEPTH;
+    for (int i = 0; i < EDIT_BUF; i++)
+        buffer[i] = undo_buffer[slot][i];
+    row = undo_rows[slot];
+    col = undo_cols[slot];
+    top_row = undo_tops[slot];
+    undo_head = slot;
+    undo_count--;
+    set_status("Undo");
+}
+
 void editor_init(void) {
     for (int i = 0; i < EDIT_BUF; i++) buffer[i] = ' ';
     row = 0; col = 0; top_row = 0;
     lang = LANG_C;
     cur_file[0] = '\0';
+    undo_reset();
     set_status("New file - C mode");
 }
 
@@ -185,6 +228,7 @@ static void editor_load_path(const char *path) {
     int i = 0;
     while (path[start] && i < MAX_FNAME - 1) cur_file[i++] = path[start++];
     cur_file[i] = '\0';
+    undo_reset();
     set_status("Loaded file");
 }
 
@@ -235,8 +279,18 @@ void editor_draw(int x, int y, int w, int h) {
     draw_text(x + 156, btn_y + 4, "<", 0xFF444444);
     draw_text(x + 218, btn_y + 4, ">", 0xFF444444);
 
-    if (status_ticks > 0 && status_msg[0])
+    if (goto_mode) {
+        char prompt[32] = "Go to line: ";
+        int pi = 12;
+        char num[8]; int ni = 0; int n = goto_line;
+        if (n == 0) num[ni++] = '0';
+        while (n > 0) { num[ni++] = '0' + n % 10; n /= 10; }
+        while (ni > 0) prompt[pi++] = num[--ni];
+        prompt[pi] = '\0';
+        draw_text(x + 230, btn_y + 4, prompt, 0xFF8B5CF6);
+    } else if (status_ticks > 0 && status_msg[0]) {
         draw_text(x + 230, btn_y + 4, status_msg, 0xFF006600);
+    }
 
     /* File indicator */
     if (cur_file[0]) {
@@ -391,12 +445,34 @@ void editor_draw(int x, int y, int w, int h) {
 }
 
 void editor_handle_key(char key) {
+    if (goto_mode) {
+        if (key >= '0' && key <= '9') {
+            if (goto_line < 100000) goto_line = goto_line * 10 + (key - '0');
+        } else if (key == '\n' || key == '\r') {
+            int target = goto_line > 0 ? goto_line - 1 : 0;
+            if (target >= EDIT_ROWS) target = EDIT_ROWS - 1;
+            row = target;
+            col = 0;
+            top_row = row > 10 ? row - 10 : 0;
+            goto_mode = 0;
+            set_status("Line selected");
+        } else if (key == 0x1b) {
+            goto_mode = 0;
+            set_status("Go to cancelled");
+        }
+        return;
+    }
+    /* Ctrl+G = go to line */
+    if (key == 0x07) { goto_mode = 1; goto_line = 0; return; }
+    /* Ctrl+Z = undo */
+    if (key == 0x1A) { editor_undo(); return; }
     /* Ctrl+S = save */
     if (key == 0x13) { save_file(); return; }
     /* Ctrl+O = open file dialog (simplified) */
     if (key == 0x0F) { set_status("Open: use Load button"); return; }
     /* Ctrl+N = new */
     if (key == 0x0E) {
+        editor_push_undo();
         for (int i = 0; i < EDIT_BUF; i++) buffer[i] = ' ';
         row = 0; col = 0; top_row = 0; cur_file[0] = '\0';
         set_status("New file");
@@ -404,8 +480,10 @@ void editor_handle_key(char key) {
     }
 
     if (key == '\n') {
+        editor_push_undo();
         editor_new_line();
     } else if (key == '\b') {
+        editor_push_undo();
         if (col > 0) {
             col--;
             buffer[row * EDIT_COLS + col] = ' ';
@@ -420,11 +498,13 @@ void editor_handle_key(char key) {
             col = prev_len;
         }
     } else if (key == '\t') {
+        editor_push_undo();
         for (int i = 0; i < TAB_W && col < EDIT_COLS; i++) {
             buffer[row * EDIT_COLS + col] = ' ';
             col++;
         }
     } else if (key >= 32) {
+        editor_push_undo();
         if (col >= EDIT_COLS) { col = 0; if (row + 1 < EDIT_ROWS) row++; }
         buffer[row * EDIT_COLS + col] = key;
         col++;

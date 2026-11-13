@@ -5,11 +5,14 @@
 #include <solis/ata.h>
 #include <solis/rtc.h>
 #include <solis/spx.h>
+#include <solis/net.h>
+#include <solis/setup.h>
+#include <solis/brand.h>
 
 #define SIDEBAR_W 140
 #define TAB_H 36
 #define COLORS 7
-#define NUM_TABS 5
+#define NUM_TABS 6
 #define HEADER_H 30
 #define SCROLL_STEP 32
 
@@ -17,6 +20,7 @@ static int settings_tab = 0;
 static int sel_color = 0;
 static int hover_tab = -1;
 static int hover_tz = -1;
+static char ping_status[24];
 
 /* The content of the active tab can be taller than the client area (the
  * timezone list alone is 14 rows), so it scrolls. Offsets are per tab so
@@ -84,10 +88,11 @@ static void compute_layout(struct layout *L, int x, int y, int w, int h) {
 
     switch (settings_tab) {
         case 0: L->content_h = L->swatch_y - L->cy + 2 * (50 + 10 + 16) + 8; break;
-        case 1: L->content_h = 16 + 6 * 22 + 16; break;
+        case 1: L->content_h = 16 + 8 * 22 + 16; break;
         case 2: L->content_h = 16 + 5 * 22 + 16; break;
         case 3: L->content_h = 16 + 22 + 22 + 26 + rtc_get_timezone_count() * 20 + 8; break;
-        case 4: L->content_h = 30 + 24 + 20 + 20 + 28 + 1 + 12 + 3 * 16 + 8; break;
+        case 4: L->content_h = 16 + 7 * 24 + 74; break;
+        case 5: L->content_h = 30 + 24 + 20 + 20 + 28 + 1 + 12 + 3 * 16 + 8; break;
         default: L->content_h = 0; break;
     }
 
@@ -225,6 +230,24 @@ static void draw_preview_aurora(int x, int y, int w, int h) {
     graphics_draw_string(x + w / 2 - 20, y + h - 14, "Aurora", 0xFFFFFFFF);
 }
 
+static void draw_preview_solis_ui(int x, int y, int w, int h) {
+    graphics_fill_rect(x, y, w, h, 0xFF232333);
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 5; col++) {
+            uint32_t color = col < 2 ? 0xFF647F9C : 0xFF9A657D;
+            int cx = x + 12 + col * 15;
+            int cy = y + 22 + row * 14;
+            graphics_fill_circle(cx, cy, 7, color);
+            graphics_fill_circle(cx, cy, 6, 0xFF232333);
+        }
+    }
+    graphics_fill_rect(x + w / 2 - 12, y + h / 2 - 10, 24, 21,
+                       0xFF54C7B5);
+    graphics_fill_rect(x + w / 2 - 7, y + h / 2 - 20, 14, 17,
+                       0xFFF06C89);
+    graphics_draw_string(x + 5, y + h - 14, "Solis UI", 0xFFFFFFFF);
+}
+
 static const struct theme_preview theme_previews[] = {
     {GUI_THEME_SOLID, draw_preview_solid},
     {GUI_THEME_GNOME, draw_preview_gnome},
@@ -234,6 +257,7 @@ static const struct theme_preview theme_previews[] = {
     {GUI_THEME_VOXEL, draw_preview_voxel},
     {GUI_THEME_BORED, draw_preview_bored},
     {GUI_THEME_AURORA, draw_preview_aurora},
+    {GUI_THEME_SOLIS_UI_ENGINE, draw_preview_solis_ui},
 };
 
 static int theme_count(void) {
@@ -289,6 +313,24 @@ static void hex64_str(uint64_t val, char *buf) {
     buf[16] = '\0';
 }
 
+static void uint64_dec(uint64_t value, char *buf) {
+    char tmp[20];
+    int ti = 0;
+    if (value == 0) tmp[ti++] = '0';
+    while (value > 0) {
+        tmp[ti++] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+    int bi = 0;
+    while (ti > 0) buf[bi++] = tmp[--ti];
+    buf[bi] = '\0';
+}
+
+static void append_text(char *dst, int *at, const char *text, int max) {
+    while (*text && *at < max - 1) dst[(*at)++] = *text++;
+    dst[*at] = '\0';
+}
+
 static void draw_system_tab(const struct layout *L) {
     int x = L->cx;
     int py = L->cy + 16 - L->scroll;
@@ -313,7 +355,7 @@ static void draw_system_tab(const struct layout *L) {
     py += 22;
     graphics_draw_string(x + 12, py, "Storage:", 0xFF888888);
     const char *model = ata_present() ? ata_get_model() : 0;
-    graphics_draw_string(x + 80, py, model && model[0] ? model : "No ATA device", 0xFFCCCCCC);
+    graphics_draw_string(x + 80, py, model && model[0] ? model : "No storage device", 0xFFCCCCCC);
     py += 22;
     graphics_draw_string(x + 12, py, "Disk serial:", 0xFF888888);
     const char *serial = ata_present() ? ata_get_serial() : 0;
@@ -327,6 +369,38 @@ static void draw_system_tab(const struct layout *L) {
     hwid[hi] = '\0';
     graphics_draw_string(x + 12, py, "HW ID:", 0xFF888888);
     graphics_draw_string(x + 80, py, hwid + 7, 0xFFCCCCCC);
+
+    uint64_t total = solfs_get_total_bytes();
+    uint64_t free_bytes = solfs_get_free_bytes();
+    uint64_t used = total > free_bytes ? total - free_bytes : 0;
+    py += 22;
+    graphics_draw_string(x + 12, py, "SOLFS total:", 0xFF888888);
+    if (solfs_is_mounted() && total > 0) {
+        char value[24];
+        uint64_dec(total / 1024, value);
+        int at = 0;
+        append_text(value, &at, " KB", sizeof(value));
+        graphics_draw_string(x + 80, py, value, 0xFFCCCCCC);
+    } else {
+        graphics_draw_string(x + 80, py, "not mounted", 0xFFCCCCCC);
+    }
+    py += 22;
+    graphics_draw_string(x + 12, py, "SOLFS used:", 0xFF888888);
+    if (solfs_is_mounted() && total > 0) {
+        char value[32];
+        char number[20];
+        char percent[8];
+        uint64_dec(used / 1024, number);
+        uint64_dec(used * 100 / total, percent);
+        int at = 0;
+        append_text(value, &at, number, sizeof(value));
+        append_text(value, &at, " KB (", sizeof(value));
+        append_text(value, &at, percent, sizeof(value));
+        append_text(value, &at, "%)", sizeof(value));
+        graphics_draw_string(x + 80, py, value, 0xFFCCCCCC);
+    } else {
+        graphics_draw_string(x + 80, py, "unavailable", 0xFFCCCCCC);
+    }
 }
 
 static void draw_display_tab(const struct layout *L) {
@@ -366,21 +440,111 @@ static void draw_about_tab(const struct layout *L) {
     int x = L->cx;
     int w = L->cw;
     int py = L->cy + 30 - L->scroll;
-    graphics_draw_string(x + w/2 - 28, py, "Solis OS", 0xFF4A90E2);
+    graphics_draw_string(x + w/2 - 72, py, SOLIS_RELEASE_LINE, 0xFF4A90E2);
     py += 24;
-    graphics_draw_string(x + w/2 - 40, py, "Version 1.0", 0xFFCCCCCC);
+    graphics_draw_string(x + w/2 - 60, py, SOLIS_TAGLINE, 0xFFCCCCCC);
     py += 20;
-    graphics_draw_string(x + w/2 - 48, py, "A 32-bit Hobby OS", 0xFF888888);
+    const char *edition = setup_edition() == SETUP_EDITION_MINIMAL ? "Minimal"
+                        : setup_edition() == SETUP_EDITION_STANDARD ? "Standard"
+                        : "Extra (Doom included)";
+    graphics_draw_string(x + 12, py, "Edition:", 0xFF888888);
+    graphics_draw_string(x + 96, py, edition, 0xFFCCCCCC);
     py += 20;
-    graphics_draw_string(x + w/2 - 52, py, "Built with love and C", 0xFF888888);
+    graphics_draw_string(x + 12, py, "Session:", 0xFF888888);
+    graphics_draw_string(x + 96, py,
+                         setup_is_guest() ? "Guest" : "Local account",
+                         0xFFCCCCCC);
     py += 28;
     graphics_fill_rect(x + w/2 - 60, py, 120, 1, 0xFF444444);
     py += 12;
-    graphics_draw_string(x + w/2 - 52, py, "GUI Framework: SolisGUI", 0xFF666666);
+    graphics_draw_string(x + w/2 - 52, py, "GUI Framework: Solis UI", 0xFF666666);
     py += 16;
-    graphics_draw_string(x + w/2 - 48, py, "Graphics: VBE 1280x960", 0xFF666666);
+    graphics_draw_string(x + w/2 - 68, py, "Doom: GPL-2.0 / shareware WAD", 0xFF666666);
+    py += 16;
+    graphics_draw_string(x + w/2 - 48, py, "Graphics: VBE 1024x768", 0xFF666666);
     py += 16;
     graphics_draw_string(x + w/2 - 44, py, "Font: 8x16 Bitmap", 0xFF666666);
+}
+
+static void draw_ipv4_value(int x, int y, const uint8_t address[4],
+                            uint32_t color) {
+    char text[16];
+    int pos = 0;
+    for (int octet = 0; octet < 4; octet++) {
+        int value = address[octet];
+        char digits[3];
+        int count = 0;
+        if (value == 0) digits[count++] = '0';
+        while (value > 0) {
+            digits[count++] = (char)('0' + value % 10);
+            value /= 10;
+        }
+        while (count > 0) text[pos++] = digits[--count];
+        if (octet < 3) text[pos++] = '.';
+    }
+    text[pos] = '\0';
+    graphics_draw_string(x, y, text, color);
+}
+
+static void draw_network_tab(const struct layout *L) {
+    int x = L->cx;
+    int py = L->cy + 18 - L->scroll;
+    int connected = net_available();
+    graphics_draw_string(x + 12, py, "Connection", 0xFFCCCCCC);
+    py += 28;
+
+    graphics_draw_string(x + 12, py, "Network:", 0xFF888888);
+    graphics_draw_string(x + 100, py,
+                         connected ? "Configured" : "Not configured",
+                         connected ? 0xFF75D6A0 : 0xFFF08A80);
+    py += 24;
+
+    graphics_draw_string(x + 12, py, "Adapter:", 0xFF888888);
+    const char *device_name = net_get_device_name();
+    graphics_draw_string(x + 100, py,
+                         device_name[0] ? device_name : "Unavailable",
+                         0xFFCCCCCC);
+    py += 24;
+
+    uint8_t address[4];
+    graphics_draw_string(x + 12, py, "Address:", 0xFF888888);
+    net_get_ip(address);
+    draw_ipv4_value(x + 100, py, address,
+                    connected ? 0xFFCCCCCC : 0xFF777777);
+    py += 24;
+
+    graphics_draw_string(x + 12, py, "Gateway:", 0xFF888888);
+    net_get_gateway(address);
+    draw_ipv4_value(x + 100, py, address,
+                    connected ? 0xFFCCCCCC : 0xFF777777);
+    py += 24;
+
+    graphics_draw_string(x + 12, py, "DNS:", 0xFF888888);
+    net_get_dns(address);
+    draw_ipv4_value(x + 100, py, address,
+                    connected ? 0xFFCCCCCC : 0xFF777777);
+    py += 24;
+
+    graphics_draw_string(x + 12, py, "Wi-Fi:", 0xFF888888);
+    graphics_draw_string(x + 100, py,
+                         net_wifi_adapter_present()
+                             ? "MT7902 detected; no driver"
+                             : "MT7902 not detected",
+                         0xFFF08A80);
+    py += 24;
+    graphics_draw_string(x + 12, py, "Wireless scanning and WPA2 are",
+                         0xFF888888);
+    py += 18;
+    graphics_draw_string(x + 12, py, "not available yet.",
+                         0xFF888888);
+
+    int by = L->cy + 18 - L->scroll + 7 * 24 + 40;
+    graphics_fill_rect(x + 12, by, 120, 26, 0xFF354E72);
+    graphics_draw_rect(x + 12, by, 120, 26, 0xFF596DE8);
+    graphics_draw_string(x + 24, by + 5, "Ping gateway", 0xFFFFFFFF);
+    if (ping_status[0])
+        graphics_draw_string(x + 142, by + 5, ping_status,
+                             ping_status[0] == 'O' ? 0xFF75D6A0 : 0xFFF08A80);
 }
 
 static void append_str(char *buf, int *idx, const char *s) {
@@ -491,7 +655,8 @@ void settings_draw(int x, int y, int w, int h) {
     graphics_fill_rect(x, y, SIDEBAR_W, h, 0xFF252525);
     graphics_fill_rect(x + SIDEBAR_W, y, 1, h, 0xFF3A3A3A);
 
-    const char *tabs[] = {"Appearance", "System", "Display", "Time & Date", "About"};
+    const char *tabs[] = {"Appearance", "System", "Display", "Time & Date",
+                          "Network", "About"};
     int ntabs = NUM_TABS;
     for (int i = 0; i < ntabs; i++) {
         int ty = y + 8 + i * TAB_H;
@@ -520,7 +685,8 @@ void settings_draw(int x, int y, int w, int h) {
         case 1: draw_system_tab(&L); break;
         case 2: draw_display_tab(&L); break;
         case 3: draw_time_tab(&L); break;
-        case 4: draw_about_tab(&L); break;
+        case 4: draw_network_tab(&L); break;
+        case 5: draw_about_tab(&L); break;
     }
 
     /* Scrollbar, only when the content actually overflows. Drawn over the
@@ -582,6 +748,7 @@ void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y)
             if (mouse_x >= cx && mouse_x < cx + L.theme_w &&
                 mouse_y >= cy && mouse_y < cy + L.theme_h) {
                 gui_set_theme(theme_previews[i].id);
+                setup_set_theme(theme_previews[i].id);
                 return;
             }
         }
@@ -607,6 +774,25 @@ void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y)
                 rtc_set_timezone(i);
                 return;
             }
+        }
+    } else if (settings_tab == 4) {
+        int by = L.cy + 18 - L.scroll + 7 * 24 + 40;
+        if (mouse_x >= L.cx + 12 && mouse_x < L.cx + 132 &&
+            mouse_y >= by && mouse_y < by + 26) {
+            uint8_t gw[4];
+            net_get_gateway(gw);
+            ping_status[0] = '\0';
+            if (!net_available()) {
+                const char *no = "No network";
+                for (int i = 0; no[i] && i < 23; i++) ping_status[i] = no[i];
+            } else if (net_ping(gw, 300) == 0) {
+                const char *ok = "OK";
+                for (int i = 0; ok[i]; i++) ping_status[i] = ok[i];
+            } else {
+                const char *fail = "No reply";
+                for (int i = 0; fail[i]; i++) ping_status[i] = fail[i];
+            }
+            return;
         }
     }
 }

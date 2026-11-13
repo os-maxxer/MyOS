@@ -4,6 +4,7 @@
 #include <solis/types.h>
 #include <solis/rtc.h>
 #include <solis/dbg.h>
+#include <stdbool.h>
 
 #define SYSCALL_TABLE_ADDR 0x00007E00
 
@@ -42,6 +43,7 @@ struct syscall_table {
     int  (*gui_get_theme)(void);
     void (*gui_set_bg_color)(uint32_t color);
     void (*gui_set_theme)(int theme);
+    int  (*setup_set_theme)(int theme);
 
     int  (*ata_present)(void);
     const char* (*ata_get_serial)(void);
@@ -50,12 +52,19 @@ struct syscall_table {
     /* System info */
     uint32_t (*sys_get_total_ram)(void);
     void (*sys_get_cpu_brand)(char *buf, int max_len);
+    int  (*jit_execute)(const uint8_t *code, uint32_t code_size,
+                        const uint8_t *data, uint32_t data_size);
     int  (*spx_install)(const uint8_t *data, uint32_t size);
     int  (*spx_uninstall)(const char *name);
     int  (*spx_find_slot)(const char *name);
     int  (*spx_list_installed)(char names[][12], int max);
     uint64_t (*sys_get_machine_id)(void);
     int  (*net_available)(void);
+    const char *(*net_get_device_name)(void);
+    int  (*net_wifi_adapter_present)(void);
+    void (*net_get_ip)(uint8_t *ip);
+    void (*net_get_gateway)(uint8_t *ip);
+    void (*net_get_dns)(uint8_t *ip);
     int  (*net_http_get)(const uint8_t *ip, uint16_t port,
                          const char *host, const char *path,
                          uint8_t *response, uint32_t max_size);
@@ -78,6 +87,26 @@ struct syscall_table {
     int  (*gui_save_dialog)(const char *suggested, char *out_path, int out_max);
     int  (*gui_open_dialog)(char *out_path, int out_max);
     int  (*gui_open_with)(int slot, const char *path);
+
+    /* SolFS capacity and usage, in bytes. Zero when no disk is mounted. */
+    uint64_t (*solfs_get_total_bytes)(void);
+    uint64_t (*solfs_get_free_bytes)(void);
+    uint64_t (*solfs_get_used_bytes)(void);
+
+    bool (*setup_is_installed)(void);
+    int  (*setup_change_password)(const char *password);
+    int  (*setup_edition)(void);
+    bool (*setup_is_guest)(void);
+
+    /* Fast path for software-rendered apps (Doom). The kernel clips the
+     * rectangle and scales each source row into the destination. */
+    void (*blit_rgb_scaled)(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                            const uint32_t *src, uint32_t src_w,
+                            uint32_t src_h);
+
+    /* Read-only shareware WAD embedded in the kernel image. */
+    const uint8_t *doom_wad;
+    uint32_t doom_wad_size;
 };
 
 #endif

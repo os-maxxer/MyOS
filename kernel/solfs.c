@@ -13,6 +13,7 @@
 #define SOLFS_FAT_EOF     0xFFFF
 #define SOLFS_FAT_FREE    0x0000
 #define SOLFS_MIN_SECTORS 8192
+#define SOLFS_MAX_VOLUME_SECTORS (SOLFS_DATA_START + SOLFS_FAT_ENTRIES - 2)
 
 struct solfs_superblock {
     uint32_t magic;
@@ -324,32 +325,46 @@ int solfs_open(const char *name) {
     return -1;
 }
 
-int solfs_read(int fd, uint8_t *buf, uint32_t size) {
+int solfs_read_at(int fd, uint32_t offset, uint8_t *buf, uint32_t size) {
     if (fd < 0 || fd >= SOLFS_DIR_ENTRIES) return -1;
     struct solfs_dirent *d = dirent(fd);
     if (d->name[0] == '\0' || (d->attrs & SOLFS_ATTR_DIR) || (!buf && size))
         return -1;
+    if (offset >= d->file_size || size == 0) return 0;
 
-    uint32_t to_read = size;
-    if (to_read > d->file_size) to_read = d->file_size;
+    uint32_t to_read = d->file_size - offset;
+    if (to_read > size) to_read = size;
 
     uint16_t cl = d->first_cluster;
-    uint32_t pos = 0;
+    uint32_t sectors_to_skip = offset / ATA_SECTOR_SIZE;
+    while (sectors_to_skip--) {
+        if (cl < 2 || cl >= solfs_cluster_limit) return -1;
+        cl = fat_cache[cl];
+    }
 
-    while (cl >= 2 && cl < solfs_cluster_limit && pos < to_read) {
+    uint32_t sector_offset = offset % ATA_SECTOR_SIZE;
+    uint32_t copied = 0;
+
+    while (cl >= 2 && cl < solfs_cluster_limit && copied < to_read) {
         uint32_t lba = SOLFS_DATA_START + (cl - 2);
         uint8_t sector[ATA_SECTOR_SIZE];
         if (solfs_read_sector(lba, sector) != 0) return -1;
 
-        uint32_t chunk = to_read - pos;
-        if (chunk > ATA_SECTOR_SIZE) chunk = ATA_SECTOR_SIZE;
+        uint32_t chunk = ATA_SECTOR_SIZE - sector_offset;
+        if (chunk > to_read - copied) chunk = to_read - copied;
         for (uint32_t i = 0; i < chunk; i++)
-            buf[pos++] = sector[i];
+            buf[copied + i] = sector[sector_offset + i];
+        copied += chunk;
 
         cl = fat_cache[cl];
+        sector_offset = 0;
     }
 
-    return pos == to_read ? (int)pos : -1;
+    return copied == to_read ? (int)copied : -1;
+}
+
+int solfs_read(int fd, uint8_t *buf, uint32_t size) {
+    return solfs_read_at(fd, 0, buf, size);
 }
 
 int solfs_write(int fd, const uint8_t *buf, uint32_t size) {
@@ -478,6 +493,125 @@ int solfs_isdir(int fd) {
     struct solfs_dirent *d = dirent(fd);
     if (d->name[0] == '\0') return -1;
     return (d->attrs & SOLFS_ATTR_DIR) ? 1 : 0;
+}
+
+bool solfs_is_mounted(void) {
+    return solfs_sector_count != 0;
+}
+
+bool solfs_can_format(void) {
+    if (solfs_sector_count != 0)
+        return false;
+    uint64_t start = 0;
+    uint64_t count = 0;
+    if (!ata_get_solfs_region(&start, &count))
+        return false;
+    return count >= SOLFS_MIN_SECTORS;
+}
+
+int solfs_format(void) {
+    if (solfs_sector_count != 0)
+        return 0;
+
+    uint64_t start = 0;
+    uint64_t count = 0;
+    if (!ata_get_solfs_region(&start, &count)
+        || count < SOLFS_MIN_SECTORS) {
+        console_write("SOLFS: no formattable Solis volume; attach a blank disk.\n");
+        return -1;
+    }
+    if (count > SOLFS_MAX_VOLUME_SECTORS)
+        count = SOLFS_MAX_VOLUME_SECTORS;
+
+    uint8_t sector[ATA_SECTOR_SIZE];
+    for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++)
+        sector[i] = 0;
+    for (uint32_t i = 0; i < SOLFS_FAT_SECTORS; i++) {
+        if (ata_write_sector(start + 1 + i, sector) != 0) {
+            console_write("SOLFS: format failed writing the allocation table.\n");
+            return -1;
+        }
+    }
+    for (uint32_t i = 0; i < SOLFS_DIR_SECTORS; i++) {
+        if (ata_write_sector(start + SOLFS_DATA_START - SOLFS_DIR_SECTORS + i,
+                             sector) != 0) {
+            console_write("SOLFS: format failed writing the root directory.\n");
+            return -1;
+        }
+    }
+
+    struct solfs_superblock sb;
+    uint8_t *raw = (uint8_t *)&sb;
+    for (uint32_t i = 0; i < sizeof(sb); i++)
+        raw[i] = 0;
+    sb.magic = SOLFS_MAGIC;
+    sb.version = SOLFS_VERSION;
+    sb.block_size = ATA_SECTOR_SIZE;
+    sb.total_sectors = (uint32_t)count;
+    sb.fat_start = 1;
+    sb.fat_sectors = SOLFS_FAT_SECTORS;
+    sb.root_dir_start = SOLFS_DATA_START - SOLFS_DIR_SECTORS;
+    sb.root_dir_entries = SOLFS_DIR_ENTRIES;
+    sb.data_start = SOLFS_DATA_START;
+    sb.machine_id = 0x534F4C49534F5331ULL; /* "SOLISOS1" */
+
+    if (ata_write_sector(start, raw) != 0) {
+        console_write("SOLFS: format failed writing the superblock.\n");
+        return -1;
+    }
+    if (ata_read_sector(start, sector) != 0
+        || ((struct solfs_superblock *)sector)->magic != SOLFS_MAGIC
+        || ((struct solfs_superblock *)sector)->version != SOLFS_VERSION) {
+        console_write("SOLFS: format verification failed.\n");
+        return -1;
+    }
+
+    solfs_start_lba = start;
+    solfs_sector_count = count;
+    if (count >= SOLFS_MAX_VOLUME_SECTORS)
+        solfs_cluster_limit = SOLFS_FAT_ENTRIES;
+    else
+        solfs_cluster_limit = (uint32_t)(count - SOLFS_DATA_START + 2);
+
+    for (uint32_t i = 0; i < SOLFS_FAT_ENTRIES; i++)
+        fat_cache[i] = SOLFS_FAT_FREE;
+    fat_cache[0] = 1;
+    fat_cache[1] = 1;
+    for (uint32_t i = 0; i < sizeof(dir_cache); i++)
+        dir_cache[i] = 0;
+    cached_machine_id = sb.machine_id;
+    fat_dirty = false;
+    dir_dirty = false;
+
+    console_write("SOLFS: formatted blank disk at LBA ");
+    console_write_hex64(start);
+    console_write(" sectors=");
+    console_write_hex64(count);
+    console_write("\n");
+    return 0;
+}
+
+uint64_t solfs_get_total_bytes(void) {
+    if (!solfs_sector_count || solfs_cluster_limit <= 2)
+        return 0;
+    return (uint64_t)(solfs_cluster_limit - 2) * ATA_SECTOR_SIZE;
+}
+
+uint64_t solfs_get_free_bytes(void) {
+    if (!solfs_sector_count || solfs_cluster_limit <= 2)
+        return 0;
+    uint64_t free_clusters = 0;
+    for (uint32_t i = 2; i < solfs_cluster_limit; i++) {
+        if (fat_cache[i] == SOLFS_FAT_FREE)
+            free_clusters++;
+    }
+    return free_clusters * ATA_SECTOR_SIZE;
+}
+
+uint64_t solfs_get_used_bytes(void) {
+    uint64_t total = solfs_get_total_bytes();
+    uint64_t free = solfs_get_free_bytes();
+    return total > free ? total - free : 0;
 }
 
 uint64_t solfs_get_machine_id(void) {

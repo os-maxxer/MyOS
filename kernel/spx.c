@@ -1,6 +1,7 @@
 #include <solis/spx.h>
 #include <solis/syscall.h>
 #include <solis/solfs.h>
+#include <solis/setup.h>
 #include <solis/console.h>
 #include <solis/graphics.h>
 #include <solis/gui.h>
@@ -12,7 +13,11 @@
 #include <solis/net.h>
 #include <solis/dbg.h>
 #include <solis/rtc.h>
+#include <solis/jit.h>
 #include <stddef.h>
+
+extern const uint8_t doom_wad_start[];
+extern const uint8_t doom_wad_end[];
 
 static void spx_memcpy(void *dst, const void *src, int n) {
     unsigned char *d = (unsigned char *)dst;
@@ -143,20 +148,37 @@ void spx_init_syscalls(void) {
     sys_table.solfs_write     = solfs_write;
     sys_table.solfs_get_size  = solfs_get_size;
     sys_table.solfs_get_machine_id = solfs_get_machine_id;
+    sys_table.solfs_get_total_bytes = solfs_get_total_bytes;
+    sys_table.solfs_get_free_bytes = solfs_get_free_bytes;
+    sys_table.solfs_get_used_bytes = solfs_get_used_bytes;
+    sys_table.setup_is_installed = setup_is_installed;
+    sys_table.setup_change_password = setup_change_password;
+    sys_table.setup_edition = setup_edition;
+    sys_table.setup_is_guest = setup_is_guest;
+    sys_table.blit_rgb_scaled = graphics_blit_rgb_scaled;
+    sys_table.doom_wad = doom_wad_start;
+    sys_table.doom_wad_size = (uint32_t)(doom_wad_end - doom_wad_start);
     sys_table.gui_get_theme  = gui_get_theme;
     sys_table.gui_set_bg_color = gui_set_bg_color;
     sys_table.gui_set_theme  = gui_set_theme;
+    sys_table.setup_set_theme = setup_set_theme;
     sys_table.ata_present    = spx_ata_present;
     sys_table.ata_get_serial = ata_get_serial;
     sys_table.ata_get_model  = ata_get_model;
     sys_table.sys_get_total_ram = sys_get_total_ram;
     sys_table.sys_get_cpu_brand = sys_get_cpu_brand;
+    sys_table.jit_execute    = jit_execute;
     sys_table.spx_install    = spx_install;
     sys_table.spx_uninstall  = spx_uninstall;
     sys_table.spx_find_slot  = spx_find_slot;
     sys_table.spx_list_installed = spx_list_installed;
     sys_table.sys_get_machine_id = sys_get_machine_id;
     sys_table.net_available    = net_available;
+    sys_table.net_get_device_name = net_get_device_name;
+    sys_table.net_wifi_adapter_present = net_wifi_adapter_present;
+    sys_table.net_get_ip       = net_get_ip;
+    sys_table.net_get_gateway  = net_get_gateway;
+    sys_table.net_get_dns      = net_get_dns;
     sys_table.net_http_get     = net_http_get;
     sys_table.gui_launch_app   = gui_launch_app;
     sys_table.net_ping         = net_ping;
@@ -197,7 +219,8 @@ void spx_init(struct embedded_spx *apps, int count) {
         }
 
         const struct spx_header *hdr = (const struct spx_header *)data;
-        if (hdr->magic != SPX_MAGIC || hdr->version != SPX_VERSION) {
+        if (hdr->magic != SPX_MAGIC ||
+            (hdr->version != 1 && hdr->version != SPX_VERSION)) {
             console_write("[SPX] Bad header in ");
             console_write(apps[i].name ? apps[i].name : "?");
             console_write("\n");
@@ -238,9 +261,11 @@ void spx_init(struct embedded_spx *apps, int count) {
         app_slots[i].exports.draw = exp->draw;
         app_slots[i].exports.handle_key = exp->handle_key;
         app_slots[i].exports.handle_mouse = exp->handle_mouse;
+        app_slots[i].exports.get_size = exp->get_size;
         app_slots[i].exports.handle_scroll = exp->handle_scroll;
         app_slots[i].exports.handle_context = exp->handle_context;
         app_slots[i].exports.open_file = exp->open_file;
+        app_slots[i].exports.tick = hdr->version >= 2 ? exp->tick : 0;
 
         if (app_slots[i].exports.init)
             app_slots[i].exports.init();
@@ -264,7 +289,8 @@ static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
     if (size < sizeof(struct spx_header)) return -1;
 
     const struct spx_header *hdr = (const struct spx_header *)data;
-    if (hdr->magic != SPX_MAGIC || hdr->version != SPX_VERSION) return -1;
+    if (hdr->magic != SPX_MAGIC ||
+        (hdr->version != 1 && hdr->version != SPX_VERSION)) return -1;
 
     uint8_t *load_addr = (uint8_t *)(uintptr_t)(SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)slot);
     uint32_t code_size = hdr->code_size;
@@ -290,9 +316,11 @@ static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
     app_slots[slot].exports.draw = exp->draw;
     app_slots[slot].exports.handle_key = exp->handle_key;
     app_slots[slot].exports.handle_mouse = exp->handle_mouse;
+    app_slots[slot].exports.get_size = exp->get_size;
     app_slots[slot].exports.handle_scroll = exp->handle_scroll;
     app_slots[slot].exports.handle_context = exp->handle_context;
     app_slots[slot].exports.open_file = exp->open_file;
+    app_slots[slot].exports.tick = hdr->version >= 2 ? exp->tick : 0;
 
     if (app_slots[slot].exports.init)
         app_slots[slot].exports.init();
@@ -322,6 +350,8 @@ int spx_uninstall(const char *name) {
                 app_slots[i].exports.draw = 0;
                 app_slots[i].exports.handle_key = 0;
                 app_slots[i].exports.handle_mouse = 0;
+                app_slots[i].exports.get_size = 0;
+                app_slots[i].exports.tick = 0;
                 return 0;
             }
         }

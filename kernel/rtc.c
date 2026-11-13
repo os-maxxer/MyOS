@@ -101,6 +101,16 @@ void rtc_get_time(struct rtc_time *out) {
     uint8_t century  = rtc_read_cmos(RTC_CENTURY);
     uint8_t status_b = rtc_read_cmos(RTC_STATUS_B);
 
+    /* In 12-hour mode bit 7 of the hour register is the PM flag. Strip it
+     * before converting: treating a PM hour such as 0x81 as plain BCD
+     * yields 81, and the timezone shift then rolls the date forward. */
+    int is_12h = (status_b & 0x02) == 0;
+    int is_pm = 0;
+    if (is_12h) {
+        is_pm = (hour & 0x80) != 0;
+        hour &= 0x7F;
+    }
+
     if (status_b & RTC_BINARY_MODE) {
         out->second = sec;
         out->minute = min;
@@ -119,16 +129,20 @@ void rtc_get_time(struct rtc_time *out) {
                         : 2000 + bcd_to_bin(year);
     }
 
-    if ((status_b & 0x02) == 0) {
-        int is_pm = 0;
-        if (out->hour & 0x80) {
-            out->hour &= 0x7F;
-            is_pm = 1;
-        }
+    if (is_12h) {
         if (out->hour == 0) out->hour = 12;
         if (is_pm && out->hour < 12) out->hour += 12;
         if (!is_pm && out->hour == 12) out->hour = 0;
     }
+
+    /* Firmware can expose a partially initialized RTC during early boot.
+     * Keep the date arithmetic below inside days_in_month()'s table. */
+    if (out->month < 1 || out->month > 12) out->month = 1;
+    if (out->day < 1 || out->day > 31) out->day = 1;
+    if (out->year < 1970 || out->year > 2199) out->year = 2000;
+    if (out->hour < 0 || out->hour > 23) out->hour = 0;
+    if (out->minute < 0 || out->minute > 59) out->minute = 0;
+    if (out->second < 0 || out->second > 59) out->second = 0;
 
     int offset = (current_tz >= 0 && current_tz < RTC_MAX_TIMEZONES)
                      ? tz_table[current_tz].offset_min

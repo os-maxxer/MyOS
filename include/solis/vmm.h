@@ -34,5 +34,6 @@ void vmm_activate_kernel(void);
 void *vmm_address_space_map_alloc(struct vmm_address_space *space,
                                   uintptr_t virtual_address, uint64_t flags);
 bool vmm_copy_from_user(void *destination, uintptr_t source, size_t size);
+bool vmm_copy_to_user(uintptr_t destination, const void *source, size_t size);
 
 #endif

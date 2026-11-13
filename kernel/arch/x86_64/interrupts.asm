@@ -124,7 +124,8 @@ isr_common_stub:
     mov rdi, rsp
     and rsp, -16
     call isr_common_handler
-    mov rsp, r12
+    mov r13, rax
+    mov rsp, r13
     restore_registers
     add rsp, 16
     iretq
@@ -135,7 +136,7 @@ irq_common_stub:
     mov rdi, rsp
     and rsp, -16
     call irq_common_handler
-    mov rsp, r12
+    mov r13, rax
 
     cmp qword ptr [r12 + 120], 40
     jb 1f
@@ -145,6 +146,7 @@ irq_common_stub:
     mov al, 0x20
     out 0x20, al
 
+    mov rsp, r13
     restore_registers
     add rsp, 16
     iretq

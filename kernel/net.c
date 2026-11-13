@@ -1,4 +1,5 @@
 #include <solis/net.h>
+#include <solis/net_device.h>
 #include <solis/rtl8139.h>
 #include <solis/pci.h>
 #include <solis/timer.h>
@@ -12,8 +13,10 @@ static uint8_t our_mac[NET_MAC_LEN];
 static uint8_t our_ip[NET_IP_LEN];
 static uint8_t gateway_ip[NET_IP_LEN];
 static uint8_t netmask[NET_IP_LEN];
+static uint8_t dns_ip[NET_IP_LEN];
 static uint16_t ip_id_counter = 0;
 static int net_ready = 0;
+static int mt7902_present = 0;
 
 #define PKT_BUF_SIZE 2048
 
@@ -140,6 +143,10 @@ static void dbg_print_ip(const uint8_t *ip) {
 }
 
 static int eth_send(const uint8_t *dst_mac, uint16_t type, const uint8_t *data, int len) {
+    if (!dst_mac || (!data && len != 0) || len < 0 ||
+        len > PKT_BUF_SIZE - 14)
+        return -1;
+
     uint8_t pkt[PKT_BUF_SIZE];
     struct eth_hdr *hdr = (struct eth_hdr *)pkt;
     for (int i = 0; i < 6; i++) hdr->dst[i] = dst_mac[i];
@@ -153,13 +160,15 @@ static int eth_send(const uint8_t *dst_mac, uint16_t type, const uint8_t *data, 
     dbg_print(" len=");
     dbg_print_dec(14 + len);
     dbg_print("\n");
-    rtl8139_send(pkt, 14 + len);
-    return 0;
+    return net_device_send(pkt, 14 + (uint32_t)len);
 }
 
 static int eth_recv(uint8_t *src_mac, uint16_t *type, uint8_t *data, int max) {
+    if (!src_mac || !type || !data || max < 0)
+        return -1;
+
     uint8_t pkt[PKT_BUF_SIZE];
-    int n = rtl8139_recv(pkt, PKT_BUF_SIZE);
+    int n = net_device_receive(pkt, sizeof(pkt));
     if (n < 14) {
         return 0;
     }
@@ -677,6 +686,299 @@ struct udp_hdr {
     uint16_t checksum;
 } __attribute__((packed));
 
+#define DHCP_CLIENT_PORT 68
+#define DHCP_SERVER_PORT 67
+#define DHCP_FIXED_SIZE 240
+#define DHCP_OPTIONS_MAX 312
+#define DHCP_DISCOVER 1
+#define DHCP_OFFER 2
+#define DHCP_REQUEST 3
+#define DHCP_ACK 5
+
+struct dhcp_offer {
+    uint8_t address[4];
+    uint8_t server[4];
+    uint8_t subnet[4];
+    uint8_t router[4];
+    uint8_t dns[4];
+    bool has_server;
+    bool has_subnet;
+    bool has_router;
+    bool has_dns;
+};
+
+static uint16_t read_be16(const uint8_t *data) {
+    return ((uint16_t)data[0] << 8) | data[1];
+}
+
+static uint32_t read_be32(const uint8_t *data) {
+    return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
+           ((uint32_t)data[2] << 8) | data[3];
+}
+
+static void write_be16(uint8_t *data, uint16_t value) {
+    data[0] = (uint8_t)(value >> 8);
+    data[1] = (uint8_t)value;
+}
+
+static void write_be32(uint8_t *data, uint32_t value) {
+    data[0] = (uint8_t)(value >> 24);
+    data[1] = (uint8_t)(value >> 16);
+    data[2] = (uint8_t)(value >> 8);
+    data[3] = (uint8_t)value;
+}
+
+static int dhcp_send(uint32_t xid, uint8_t message_type,
+                     const struct dhcp_offer *offer) {
+    uint8_t payload[DHCP_FIXED_SIZE + DHCP_OPTIONS_MAX] = {0};
+    payload[0] = 1;
+    payload[1] = 1;
+    payload[2] = NET_MAC_LEN;
+    write_be32(payload + 4, xid);
+    payload[10] = 0x80;
+    for (int i = 0; i < NET_MAC_LEN; i++)
+        payload[28 + i] = our_mac[i];
+    payload[236] = 99;
+    payload[237] = 130;
+    payload[238] = 83;
+    payload[239] = 99;
+
+    int option = DHCP_FIXED_SIZE;
+    payload[option++] = 53;
+    payload[option++] = 1;
+    payload[option++] = message_type;
+    if (message_type == DHCP_DISCOVER) {
+        payload[option++] = 55;
+        payload[option++] = 4;
+        payload[option++] = 1;
+        payload[option++] = 3;
+        payload[option++] = 6;
+        payload[option++] = 51;
+    } else {
+        if (!offer || !offer->has_server) return -1;
+        payload[option++] = 50;
+        payload[option++] = 4;
+        for (int i = 0; i < 4; i++)
+            payload[option++] = offer->address[i];
+        payload[option++] = 54;
+        payload[option++] = 4;
+        for (int i = 0; i < 4; i++)
+            payload[option++] = offer->server[i];
+        payload[option++] = 55;
+        payload[option++] = 3;
+        payload[option++] = 1;
+        payload[option++] = 3;
+        payload[option++] = 6;
+    }
+    payload[option++] = 255;
+
+    uint8_t packet[PKT_BUF_SIZE];
+    uint8_t *ip_bytes = packet;
+    uint8_t *udp_bytes = ip_bytes + 20;
+    uint8_t *dhcp_bytes = udp_bytes + 8;
+    uint32_t payload_len = (uint32_t)option;
+    uint16_t udp_len = (uint16_t)(8 + payload_len);
+    uint16_t ip_len = (uint16_t)(20 + udp_len);
+    struct ip_hdr *ip = (struct ip_hdr *)ip_bytes;
+    ip->ver_ihl = 0x45;
+    ip->dscp_ecn = 0;
+    ip->total_len = HTONS(ip_len);
+    ip->id = 0;
+    ip->flags_frag = HTONS(0x4000);
+    ip->ttl = 64;
+    ip->protocol = IP_PROTO_UDP;
+    ip->checksum = 0;
+    for (int i = 0; i < 4; i++) {
+        ip->src_ip[i] = 0;
+        ip->dst_ip[i] = 0xFF;
+    }
+    ip->checksum = HTONS(net_checksum(ip, 20));
+
+    write_be16(udp_bytes, DHCP_CLIENT_PORT);
+    write_be16(udp_bytes + 2, DHCP_SERVER_PORT);
+    write_be16(udp_bytes + 4, udp_len);
+    write_be16(udp_bytes + 6, 0);
+    for (uint32_t i = 0; i < payload_len; i++)
+        dhcp_bytes[i] = payload[i];
+
+    uint8_t broadcast[NET_MAC_LEN];
+    for (int i = 0; i < NET_MAC_LEN; i++) broadcast[i] = 0xFF;
+    return eth_send(broadcast, ETH_TYPE_IP, packet, ip_len);
+}
+
+static int dhcp_parse_options(const uint8_t *packet, int packet_len,
+                              struct dhcp_offer *offer,
+                              uint8_t *message_type) {
+    if (packet_len < DHCP_FIXED_SIZE ||
+        packet[236] != 99 || packet[237] != 130 ||
+        packet[238] != 83 || packet[239] != 99)
+        return -1;
+
+    offer->has_server = false;
+    offer->has_subnet = false;
+    offer->has_router = false;
+    offer->has_dns = false;
+    *message_type = 0;
+
+    int offset = DHCP_FIXED_SIZE;
+    while (offset < packet_len) {
+        uint8_t code = packet[offset++];
+        if (code == 0) continue;
+        if (code == 255) return *message_type ? 0 : -1;
+        if (offset >= packet_len) return -1;
+        uint8_t length = packet[offset++];
+        if ((int)length > packet_len - offset) return -1;
+
+        const uint8_t *value = packet + offset;
+        switch (code) {
+            case 1:
+                if (length >= 4) {
+                    for (int i = 0; i < 4; i++) offer->subnet[i] = value[i];
+                    offer->has_subnet = true;
+                }
+                break;
+            case 3:
+                if (length >= 4) {
+                    for (int i = 0; i < 4; i++) offer->router[i] = value[i];
+                    offer->has_router = true;
+                }
+                break;
+            case 6:
+                if (length >= 4) {
+                    for (int i = 0; i < 4; i++) offer->dns[i] = value[i];
+                    offer->has_dns = true;
+                }
+                break;
+            case 53:
+                if (length == 1) *message_type = value[0];
+                break;
+            case 54:
+                if (length == 4) {
+                    for (int i = 0; i < 4; i++) offer->server[i] = value[i];
+                    offer->has_server = true;
+                }
+                break;
+            default:
+                break;
+        }
+        offset += length;
+    }
+    return -1;
+}
+
+static int dhcp_receive(uint32_t xid, uint8_t expected_type,
+                        struct dhcp_offer *offer, uint32_t timeout_ticks) {
+    uint32_t deadline = timer_get_ticks() + timeout_ticks;
+    while ((int32_t)(timer_get_ticks() - deadline) < 0) {
+        uint8_t frame[PKT_BUF_SIZE];
+        uint8_t source_mac[NET_MAC_LEN];
+        uint16_t ethernet_type;
+        int frame_len = eth_recv(source_mac, &ethernet_type, frame,
+                                 sizeof(frame));
+        if (frame_len < 14 || ethernet_type != ETH_TYPE_IP) continue;
+
+        struct ip_hdr *ip = (struct ip_hdr *)frame;
+        int ip_header_len = (ip->ver_ihl & 0x0F) * 4;
+        int ip_total_len = HTONS(ip->total_len);
+        if ((ip->ver_ihl >> 4) != 4 || ip_header_len < 20 ||
+            ip_total_len < ip_header_len + 8 || ip_total_len > frame_len ||
+            ip->protocol != IP_PROTO_UDP)
+            continue;
+
+        uint8_t *udp_bytes = frame + ip_header_len;
+        if (read_be16(udp_bytes) != DHCP_SERVER_PORT ||
+            read_be16(udp_bytes + 2) != DHCP_CLIENT_PORT)
+            continue;
+        uint16_t udp_len = read_be16(udp_bytes + 4);
+        if (udp_len < 8 + DHCP_FIXED_SIZE ||
+            udp_len > ip_total_len - ip_header_len)
+            continue;
+
+        uint8_t *dhcp = udp_bytes + 8;
+        int dhcp_len = udp_len - 8;
+        if (dhcp[0] != 2 || dhcp[1] != 1 || dhcp[2] != NET_MAC_LEN ||
+            read_be32(dhcp + 4) != xid)
+            continue;
+        bool matches_mac = true;
+        for (int i = 0; i < NET_MAC_LEN; i++)
+            if (dhcp[28 + i] != our_mac[i]) matches_mac = false;
+        if (!matches_mac) continue;
+
+        uint8_t message_type;
+        struct dhcp_offer received = {0};
+        for (int i = 0; i < 4; i++) received.address[i] = dhcp[16 + i];
+        if (dhcp_parse_options(dhcp, dhcp_len, &received,
+                               &message_type) != 0 ||
+            message_type != expected_type)
+            continue;
+        *offer = received;
+        return 0;
+    }
+    return -1;
+}
+
+int net_configure_dhcp(void) {
+    if (!net_device_available() || net_ready)
+        return -1;
+
+    uint32_t xid = 0x534F4C49;
+    for (int i = 0; i < NET_MAC_LEN; i++)
+        xid = (xid * 33U) ^ our_mac[i];
+    xid ^= timer_get_ticks();
+
+    struct dhcp_offer offer = {0};
+    int discovered = -1;
+    for (int attempt = 0; attempt < 2 && discovered != 0; attempt++) {
+        if (dhcp_send(xid, DHCP_DISCOVER, 0) != 0) return -1;
+        discovered = dhcp_receive(xid, DHCP_OFFER, &offer, 100);
+    }
+    if (discovered != 0 || !offer.has_server) {
+        dbg_print("[DHCP] No valid offer received\n");
+        return -1;
+    }
+
+    int requested = -1;
+    for (int attempt = 0; attempt < 2 && requested != 0; attempt++) {
+        if (dhcp_send(xid, DHCP_REQUEST, &offer) != 0) return -1;
+        requested = dhcp_receive(xid, DHCP_ACK, &offer, 100);
+    }
+    if (requested != 0 || !offer.has_subnet || !offer.has_router) {
+        dbg_print("[DHCP] No usable acknowledgement or required network options\n");
+        return -1;
+    }
+
+    uint32_t assigned_address = read_be32(offer.address);
+    uint32_t assigned_mask = read_be32(offer.subnet);
+    uint32_t inverse_mask = ~assigned_mask;
+    uint32_t assigned_gateway = read_be32(offer.router);
+    if (assigned_address == 0 || assigned_address == UINT32_MAX ||
+        offer.address[0] == 127 || offer.address[0] >= 224 ||
+        assigned_mask == 0 ||
+        (inverse_mask & (inverse_mask + 1)) != 0 ||
+        (assigned_gateway & assigned_mask) !=
+            (assigned_address & assigned_mask)) {
+        dbg_print("[DHCP] Server assigned invalid IPv4 configuration\n");
+        return -1;
+    }
+
+    for (int i = 0; i < 4; i++) {
+        our_ip[i] = offer.address[i];
+        netmask[i] = offer.subnet[i];
+        gateway_ip[i] = offer.router[i];
+        dns_ip[i] = offer.has_dns ? offer.dns[i] : 0;
+    }
+
+    net_ready = 1;
+    dbg_print("[DHCP] Address ");
+    dbg_print_ip(our_ip);
+    dbg_print(" gateway ");
+    dbg_print_ip(gateway_ip);
+    dbg_print(" DNS ");
+    dbg_print_ip(dns_ip);
+    dbg_print("\n");
+    return 0;
+}
+
 static uint16_t udp_checksum(const uint8_t *src_ip, const uint8_t *dst_ip,
                               const uint8_t *udp_data, int udp_len) {
     uint8_t buf[512];
@@ -811,7 +1113,6 @@ int net_dns_resolve(const char *hostname, uint8_t *ip_out) {
     static uint16_t dns_src_port = 20000;
     uint16_t my_port = dns_src_port++;
 
-    uint8_t dns_ip[4] = {10, 0, 2, 3};
     udp_send(dns_ip, my_port, 53, query, qlen);
 
     uint32_t deadline = timer_get_ticks() + 500;
@@ -844,27 +1145,79 @@ int net_dns_resolve(const char *hostname, uint8_t *ip_out) {
 }
 
 int net_init(void) {
-    uint16_t slot = pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID);
-    if (slot == 0xFFFF) {
+    net_ready = 0;
+    mt7902_present = 0;
+    our_ip[0] = 0;
+    our_ip[1] = 0;
+    our_ip[2] = 0;
+    our_ip[3] = 0;
+
+    struct pci_device_info wifi_device;
+    mt7902_present = pci_find_device(0x14C3, 0x7902, &wifi_device);
+    if (mt7902_present) {
+        dbg_print("[WIFI] MediaTek MT7902 detected at PCI ");
+        dbg_print_dec(wifi_device.bus);
+        dbg_print(":");
+        dbg_print_dec(wifi_device.slot);
+        dbg_print(".");
+        dbg_print_dec(wifi_device.function);
+        dbg_print("; network scanning/association driver unavailable\n");
+    }
+
+    struct pci_device_info device;
+    if (!pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID, &device)) {
+        dbg_print("[NET] RTL8139 adapter not found; no network device is available\n");
         return -1;
     }
 
-    uint32_t bar = pci_get_bar(0, slot, 0, 0);
+    uint32_t bar = pci_get_bar(device.bus, device.slot,
+                               device.function, 0);
+    if ((bar & 1) == 0) {
+        dbg_print("[NET] RTL8139 BAR0 is not an I/O-space BAR\n");
+        return -1;
+    }
+    if (!pci_enable_command_bits(&device, PCI_COMMAND_IO_SPACE |
+                                          PCI_COMMAND_BUS_MASTER)) {
+        dbg_print("[NET] Could not enable RTL8139 PCI I/O and bus mastering\n");
+        return -1;
+    }
+
     uint16_t io_base = bar & 0xFFFC;
+    if (io_base == 0) {
+        dbg_print("[NET] RTL8139 BAR0 has an invalid I/O base\n");
+        return -1;
+    }
 
-    if (rtl8139_init(io_base) != 0) return -1;
-    rtl8139_get_mac(our_mac);
+    if (rtl8139_init(io_base) != 0) {
+        dbg_print("[NET] RTL8139 initialization failed\n");
+        return -1;
+    }
+    struct net_device network_device = {
+        .name = "RTL8139",
+        .max_frame_size = TX_BUF_SIZE,
+        .send_frame = rtl8139_send,
+        .receive_frame = rtl8139_recv,
+    };
+    rtl8139_get_mac(network_device.mac);
+    if (!net_device_register(&network_device) ||
+        !net_device_get_mac(our_mac)) {
+        dbg_print("[NET] Could not register the RTL8139 network device\n");
+        return -1;
+    }
 
-    our_ip[0] = 10; our_ip[1] = 0; our_ip[2] = 2; our_ip[3] = 15;
-    gateway_ip[0] = 10; gateway_ip[1] = 0; gateway_ip[2] = 2; gateway_ip[3] = 2;
-    netmask[0] = 255; netmask[1] = 255; netmask[2] = 255; netmask[3] = 0;
-
-    net_ready = 1;
     return 0;
 }
 
 int net_available(void) {
     return net_ready;
+}
+
+const char *net_get_device_name(void) {
+    return net_device_name();
+}
+
+int net_wifi_adapter_present(void) {
+    return mt7902_present;
 }
 
 void net_flush_rx(void) {
@@ -890,11 +1243,18 @@ void net_flush_rx(void) {
 }
 
 void net_get_ip(uint8_t *ip) {
+    if (!ip) return;
     for (int i = 0; i < 4; i++) ip[i] = our_ip[i];
 }
 
 void net_get_gateway(uint8_t *gw) {
+    if (!gw) return;
     for (int i = 0; i < 4; i++) gw[i] = gateway_ip[i];
+}
+
+void net_get_dns(uint8_t *ip) {
+    if (!ip) return;
+    for (int i = 0; i < 4; i++) ip[i] = dns_ip[i];
 }
 
 int net_is_local_ip(const uint8_t *ip) {

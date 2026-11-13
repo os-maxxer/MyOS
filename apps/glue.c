@@ -1,5 +1,6 @@
 #include <solis/syscall.h>
 #include <solis/spx.h>
+#include <solis/jit.h>
 #include <stdbool.h>
 
 static const struct syscall_table *SYS = (const struct syscall_table *)SYSCALL_TABLE_ADDR;
@@ -102,6 +103,45 @@ int solfs_get_size(int fd) {
 uint64_t solfs_get_machine_id(void) {
     return SYS->solfs_get_machine_id();
 }
+uint64_t solfs_get_total_bytes(void) {
+    return SYS->solfs_get_total_bytes();
+}
+bool solfs_is_mounted(void) {
+    return SYS->solfs_get_total_bytes() != 0;
+}
+uint64_t solfs_get_free_bytes(void) {
+    return SYS->solfs_get_free_bytes();
+}
+uint64_t solfs_get_used_bytes(void) {
+    return SYS->solfs_get_used_bytes();
+}
+
+bool setup_is_installed(void) {
+    return SYS->setup_is_installed();
+}
+int setup_change_password(const char *password) {
+    return SYS->setup_change_password(password);
+}
+int setup_edition(void) {
+    return SYS->setup_edition();
+}
+bool setup_is_guest(void) {
+    return SYS->setup_is_guest();
+}
+
+void graphics_blit_rgb_scaled(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                              const uint32_t *src, uint32_t src_w,
+                              uint32_t src_h) {
+    SYS->blit_rgb_scaled(x, y, w, h, src, src_w, src_h);
+}
+
+const uint8_t *doom_wad_data(void) {
+    return SYS->doom_wad;
+}
+
+uint32_t doom_wad_size(void) {
+    return SYS->doom_wad_size;
+}
 
 uint32_t sys_get_total_ram(void) {
     return SYS->sys_get_total_ram();
@@ -115,6 +155,11 @@ uint64_t sys_get_machine_id(void) {
 
 int spx_install(const uint8_t *data, uint32_t size) {
     return SYS->spx_install(data, size);
+}
+
+int jit_execute(const uint8_t *code, uint32_t code_size,
+                const uint8_t *data, uint32_t data_size) {
+    return SYS->jit_execute(code, code_size, data, data_size);
 }
 int spx_uninstall(const char *name) {
     return SYS->spx_uninstall(name);
@@ -135,6 +180,9 @@ void gui_set_bg_color(uint32_t color) {
 void gui_set_theme(int theme) {
     SYS->gui_set_theme(theme);
 }
+int setup_set_theme(int theme) {
+    return SYS->setup_set_theme(theme);
+}
 
 int ata_present(void) {
     return SYS->ata_present();
@@ -148,6 +196,21 @@ const char* ata_get_model(void) {
 
 int net_available(void) {
     return SYS->net_available();
+}
+const char *net_get_device_name(void) {
+    return SYS->net_get_device_name();
+}
+int net_wifi_adapter_present(void) {
+    return SYS->net_wifi_adapter_present();
+}
+void net_get_ip(uint8_t *ip) {
+    SYS->net_get_ip(ip);
+}
+void net_get_gateway(uint8_t *ip) {
+    SYS->net_get_gateway(ip);
+}
+void net_get_dns(uint8_t *ip) {
+    SYS->net_get_dns(ip);
 }
 int net_http_get(const uint8_t *ip, uint16_t port,
                  const char *host, const char *path,

@@ -16,11 +16,14 @@ static char entries[SOLFS_MAX_FILES][SOLFS_MAX_NAME];
 static int  entry_count = 0;
 static int  selected = -1;
 static int  scroll_offset = 0;
+static int  sort_mode = 0; /* 0 = name, 1 = size */
+static int entry_size(int idx);
 static char preview_buf[1024];
 static int  preview_len = 0;
 static bool context_open = false;
 static bool context_submenu = false;
 static bool properties_open = false;
+static bool delete_armed = false;
 static int context_x, context_y, context_entry = -1;
 
 static int str_len(const char *s) {
@@ -54,10 +57,48 @@ void filebrowser_init(void) {
     context_open = false;
     context_submenu = false;
     properties_open = false;
+    delete_armed = false;
+}
+
+static int name_cmp(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
+        if (ca != cb) return ca - cb;
+        a++; b++;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
 }
 
 static void refresh_list(void) {
     entry_count = vfs_ls_at(current_path, entries, SOLFS_MAX_FILES);
+    /* Directories first, then the selected sort order. */
+    for (int i = 1; i < entry_count; i++) {
+        char key[SOLFS_MAX_NAME];
+        str_cpy(key, entries[i], SOLFS_MAX_NAME);
+        int key_size = entry_size(i);
+        int j = i - 1;
+        while (j >= 0) {
+            bool key_dir = is_dir(key);
+            bool cur_dir = is_dir(entries[j]);
+            bool move = key_dir && !cur_dir;
+            if (!move && key_dir == cur_dir) {
+                int cmp;
+                if (sort_mode == 1) {
+                    int a = entry_size(j);
+                    int b = key_size;
+                    cmp = a > b ? 1 : (a < b ? -1 : name_cmp(key, entries[j]));
+                } else {
+                    cmp = name_cmp(key, entries[j]);
+                }
+                move = cmp < 0;
+            }
+            if (!move) break;
+            str_cpy(entries[j + 1], entries[j], SOLFS_MAX_NAME);
+            j--;
+        }
+        str_cpy(entries[j + 1], key, SOLFS_MAX_NAME);
+    }
     if (selected >= entry_count) selected = -1;
 }
 
@@ -93,6 +134,7 @@ static void int_to_str(int n, char *buf) {
 }
 
 static void select_entry(int idx) {
+    delete_armed = false;
     if (idx >= 0 && idx < entry_count) {
         selected = idx;
         load_preview(idx);
@@ -104,6 +146,7 @@ static void navigate_to(const char *path) {
     scroll_offset = 0;
     selected = -1;
     preview_len = 0;
+    delete_armed = false;
     refresh_list();
 }
 
@@ -326,20 +369,33 @@ void filebrowser_draw(int x, int y, int w, int h) {
     // Status bar
     int sb_y = y + h - 20;
     graphics_fill_rect(x, sb_y, w, 20, 0xFF2D2D2D);
-    char status[48];
-    int si = 0;
-    const char *drive = "c:";
-    while (*drive) status[si++] = *drive++;
-    const char *rest = current_path;
-    if (!rest[0]) rest = "/";
-    while (*rest && si < 40) status[si++] = *rest++;
-    status[si++] = ' ';
-    status[si++] = '-';
-    status[si++] = ' ';
-    int_to_str(entry_count, status + si);
-    while (status[si]) si++;
-    status[si] = '\0';
-    graphics_draw_string(x + 6, sb_y + 3, status, 0xFFCCCCCC);
+    if (delete_armed && selected >= 0 && selected < entry_count) {
+        char confirm[80];
+        int ci = 0;
+        const char *lead = "Delete ";
+        while (*lead) confirm[ci++] = *lead++;
+        const char *name = entries[selected];
+        while (*name && ci < 50) confirm[ci++] = *name++;
+        const char *tail = "? Press Delete again to confirm";
+        while (*tail && ci < 79) confirm[ci++] = *tail++;
+        confirm[ci] = '\0';
+        graphics_draw_string(x + 6, sb_y + 3, confirm, 0xFFE4B363);
+    } else {
+        char status[48];
+        int si = 0;
+        const char *drive = "c:";
+        while (*drive) status[si++] = *drive++;
+        const char *rest = current_path;
+        if (!rest[0]) rest = "/";
+        while (*rest && si < 40) status[si++] = *rest++;
+        status[si++] = ' ';
+        status[si++] = '-';
+        status[si++] = ' ';
+        int_to_str(entry_count, status + si);
+        while (status[si]) si++;
+        status[si] = '\0';
+        graphics_draw_string(x + 6, sb_y + 3, status, 0xFFCCCCCC);
+    }
     draw_context_menu(x, y, w, h);
 }
 
@@ -356,6 +412,30 @@ void filebrowser_handle_key(char key) {
         }
     } else if (key == 'h' || key == 0x1B) {
         go_up();
+    } else if (key == 0x7F) {
+        if (selected < 0 || selected >= entry_count || is_dir(entries[selected])) {
+            delete_armed = false;
+            return;
+        }
+        if (!delete_armed) {
+            delete_armed = true;
+            return;
+        }
+        char path[PATH_MAX];
+        entry_path(selected, path, sizeof(path));
+        if (vfs_delete(path) == 0) {
+            selected = -1;
+            preview_len = 0;
+            delete_armed = false;
+            refresh_list();
+        } else {
+            delete_armed = false;
+        }
+    } else if (key == 'r' || key == 'R') {
+        refresh_list();
+    } else if (key == 's' || key == 'S') {
+        sort_mode = sort_mode ? 0 : 1;
+        refresh_list();
     } else if (key == '\n' || key == '\r') {
         if (selected >= 0 && selected < entry_count && is_dir(entries[selected])) {
             nav_to_subdir(entries[selected]);

@@ -13,6 +13,7 @@ struct mouse_state {
 
 void mouse_init(void);
 void mouse_get_state(struct mouse_state *state);
+void mouse_submit_usb_report(uint8_t buttons, int8_t dx, int8_t dy);
 bool mouse_has_moved(void);
 void mouse_clear_moved(void);
 

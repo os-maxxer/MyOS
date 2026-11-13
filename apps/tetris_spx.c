@@ -7,4 +7,5 @@ const struct app_exports __attribute__((section(".spx_exports"), used)) spx_app 
     .draw = tetris_draw,
     .handle_key = tetris_handle_key,
     .handle_mouse = 0,
+    .tick = tetris_tick,
 };

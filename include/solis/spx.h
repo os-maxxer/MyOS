@@ -4,8 +4,8 @@
 #include <solis/types.h>
 
 #define SPX_MAGIC    0x5350580A
-#define SPX_VERSION  1
-#define SPX_MAX_APPS 10
+#define SPX_VERSION  2
+#define SPX_MAX_APPS 12
 #define SPX_NAME_LEN 12
 
 struct spx_header {
@@ -37,6 +37,11 @@ struct app_exports {
     void (*handle_scroll)(int x, int y, int w, int h, int notches);
     void (*handle_context)(int x, int y, int w, int h, int mx, int my);
     void (*open_file)(const char *path);
+    /* Optional: advance time-based state. Called about 20 times a second
+     * while the window is visible; returning non-zero asks the desktop to
+     * repaint the client area. Keep draw() free of state changes so partial
+     * repaints (cursor, damage) cannot corrupt the frame. */
+    int (*tick)(void);
 };
 
 #define SPX_SLOT_BASE   0x01000000
@@ -66,6 +71,8 @@ enum spx_app_id {
     SPX_EDITOR      = 7,
     SPX_TETRIS      = 8,
     SPX_BLOCKS      = 9,
+    SPX_CALCULATOR  = 10,
+    SPX_DOOM        = 11,
 };
 
 #endif

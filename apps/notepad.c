@@ -14,6 +14,7 @@ static int note_row = 0;
 static int note_col = 0;
 static char status_msg[40];
 static int status_ticks = 0;
+static int note_dirty = 0;
 
 void notepad_init(void) {
     for (int i = 0; i < NOTE_BUF; i++)
@@ -22,6 +23,7 @@ void notepad_init(void) {
     note_col = 0;
     status_msg[0] = '\0';
     status_ticks = 0;
+    note_dirty = 0;
 }
 
 static void notepad_scroll(void) {
@@ -93,6 +95,7 @@ static void save_note(void) {
     while (path[ni] && si < 39) msg[si++] = path[ni++];
     msg[si] = '\0';
     set_status(msg);
+    note_dirty = 0;
 }
 
 static void new_note(void) {
@@ -101,6 +104,7 @@ static void new_note(void) {
     note_row = 0;
     note_col = 0;
     set_status("New note");
+    note_dirty = 0;
 }
 
 void notepad_open_file(const char *path) {
@@ -140,6 +144,7 @@ void notepad_open_file(const char *path) {
     note_row = row;
     note_col = col;
     if (note_row >= NOTE_ROWS) note_row = NOTE_ROWS - 1;
+    note_dirty = 0;
 
     char msg[40];
     int si = 0;
@@ -173,7 +178,8 @@ void notepad_draw(int x, int y, int w, int h) {
     int text_x = x + 2;
     int text_y = y + TOOLBAR_H + 2;
     int text_w = w - 4;
-    int text_h = h - TOOLBAR_H - 4;
+    int text_h = h - TOOLBAR_H - 24;
+    if (text_h < 1) text_h = 1;
 
     int text_area_w = text_w;
     graphics_fill_rect(text_x, text_y, text_area_w, text_h, 0xFFFFFFFF);
@@ -204,11 +210,42 @@ void notepad_draw(int x, int y, int w, int h) {
         graphics_draw_string(text_x + 4 + cursor_screen_col * 8, text_y + 4 + cursor_screen_row * 16, cursor_str, 0xFF000000);
     }
 
+    int used = 0;
+    for (int i = 0; i < NOTE_BUF; i++)
+        if (note_buffer[i] != ' ') used++;
+    char info[48];
+    int ii = 0;
+    const char *ln = "Ln ";
+    while (*ln) info[ii++] = *ln++;
+    char num[8]; int ni = 0;
+    int rn = note_row + 1;
+    while (rn > 0) { num[ni++] = '0' + rn % 10; rn /= 10; }
+    while (ni > 0) info[ii++] = num[--ni];
+    info[ii++] = ','; info[ii++] = ' ';
+    const char *cl = "Col ";
+    while (*cl) info[ii++] = *cl++;
+    ni = 0; rn = note_col + 1;
+    while (rn > 0) { num[ni++] = '0' + rn % 10; rn /= 10; }
+    while (ni > 0) info[ii++] = num[--ni];
+    info[ii++] = ' '; info[ii++] = '|'; info[ii++] = ' ';
+    ni = 0;
+    while (used > 0) { num[ni++] = '0' + used % 10; used /= 10; }
+    if (ni == 0) num[ni++] = '0';
+    while (ni > 0) info[ii++] = num[--ni];
+    const char *tail = note_dirty ? " chars  Modified" : " chars  Saved";
+    while (*tail && ii < (int)sizeof(info) - 1) info[ii++] = *tail++;
+    info[ii] = '\0';
+    graphics_fill_rect(x, y + h - 20, w, 20, 0xFFE8E8E8);
+    graphics_draw_rect(x, y + h - 20, w, 20, 0xFFCCCCCC);
+    graphics_draw_string(x + 6, y + h - 16, info, 0xFF555555);
+
     if (status_ticks > 0) status_ticks--;
 }
 
 void notepad_handle_key(char key) {
     if (key == 0x13) { save_note(); return; }
+    if (key == 0x0E) { new_note(); return; }
+    note_dirty = 1;
     if (key == '\n') {
         note_col = 0;
         note_row++;

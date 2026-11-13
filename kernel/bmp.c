@@ -8,8 +8,10 @@
 #define WALLPAPER_MAX_W 1280
 #define WALLPAPER_MAX_H 960
 
-static uint8_t  bmp_file_buf[BMP_MAX_FILE_SIZE];
-static uint32_t wallpaper_cache[WALLPAPER_MAX_W * WALLPAPER_MAX_H];
+static uint8_t  bmp_file_buf[BMP_MAX_FILE_SIZE]
+    __attribute__((section(".gui_cache")));
+static uint32_t wallpaper_cache[WALLPAPER_MAX_W * WALLPAPER_MAX_H]
+    __attribute__((section(".gui_cache")));
 static uint32_t wallpaper_w = 0;
 static uint32_t wallpaper_h = 0;
 static int      wallpaper_loaded = 0;

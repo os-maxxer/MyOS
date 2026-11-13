@@ -43,6 +43,16 @@ void pic_send_eoi(uint8_t irq) {
 }
 
 void pic_enable_irq(uint8_t irq) {
+    if (irq >= 16) return;
+    if (irq >= 8) {
+        /* IRQ2 is the cascade from the slave PIC. It must be unmasked here
+         * as well, or enabling a slave IRQ such as the PS/2 mouse's IRQ12
+         * has no effect on machines whose firmware left the cascade masked. */
+        uint8_t master = inb(PIC1_DATA);
+        master &= ~(1 << 2);
+        outb(PIC1_DATA, master);
+    }
+
     uint16_t port = (irq < 8) ? PIC1_DATA : PIC2_DATA;
     uint8_t value = inb(port);
     value &= ~(1 << (irq % 8));
@@ -50,6 +60,7 @@ void pic_enable_irq(uint8_t irq) {
 }
 
 void pic_disable_irq(uint8_t irq) {
+    if (irq >= 16) return;
     uint16_t port = (irq < 8) ? PIC1_DATA : PIC2_DATA;
     uint8_t value = inb(port);
     value |= (1 << (irq % 8));

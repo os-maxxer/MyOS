@@ -19,7 +19,7 @@ void pointer_init(void) {
     i2c_init();
     touchpad_init();
     touchpad_active = touchpad_present();
-    dbg_set_driver_state("pointer", touchpad_active ? DBG_DRIVER_ACTIVE : DBG_DRIVER_ACTIVE);
+    dbg_set_driver_state("pointer", DBG_DRIVER_ACTIVE);
     dbg_set_pipeline_stage(touchpad_active ? "i2c" : "ps2");
 }
 
@@ -53,5 +53,8 @@ bool pointer_poll(struct pointer_state *state) {
         }
     }
 
-    return state->dx != 0 || state->dy != 0 || state->buttons != 0;
+    bool mouse_changed = mouse_has_moved();
+    mouse_clear_moved();
+    return state->dx != 0 || state->dy != 0 || state->buttons != 0 ||
+           mouse_changed;
 }

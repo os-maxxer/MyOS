@@ -21,6 +21,12 @@ DESKTOP_DIR := desktop
 APPS_DIR := apps
 PKG_DIR := pkg
 SPX_DIR := $(BUILD_DIR)/spx
+DOOM_DIR := third_party/doom
+DOOM_SRCS := $(wildcard $(DOOM_DIR)/*.c) $(wildcard $(DOOM_DIR)/solis/*.c)
+DOOM_OBJS := $(patsubst $(DOOM_DIR)/%.c,$(BUILD_DIR)/doom/%.o,$(DOOM_SRCS))
+DOOM_CFLAGS := -m64 -ffreestanding -fno-pie -fno-stack-protector -fno-builtin \
+	-fno-asynchronous-unwind-tables -mno-red-zone -msse2 -mfpmath=sse -O2 -w \
+	-DSOLIS -Iinclude -I$(DOOM_DIR) -I$(DOOM_DIR)/compat -I$(DOOM_DIR)/solis
 
 OBJS := \
 	$(BUILD_DIR)/boot/boot.o \
@@ -28,6 +34,7 @@ OBJS := \
 	$(BUILD_DIR)/kernel/pmm.o \
 	$(BUILD_DIR)/kernel/vmm.o \
 	$(BUILD_DIR)/kernel/user_elf.o \
+	$(BUILD_DIR)/kernel/task.o \
 	$(BUILD_DIR)/kernel/usermode.o \
 	$(BUILD_DIR)/kernel/console.o \
 	$(BUILD_DIR)/kernel/gdt.o \
@@ -38,6 +45,7 @@ OBJS := \
 	$(BUILD_DIR)/kernel/keyboard.o \
 	$(BUILD_DIR)/kernel/mouse.o \
 	$(BUILD_DIR)/kernel/pointer.o \
+	$(BUILD_DIR)/kernel/usb.o \
 	$(BUILD_DIR)/kernel/i2c.o \
 	$(BUILD_DIR)/kernel/touchpad.o \
 	$(BUILD_DIR)/kernel/graphics.o \
@@ -46,16 +54,24 @@ OBJS := \
 	$(BUILD_DIR)/kernel/apic.o \
 	$(BUILD_DIR)/kernel/solfs.o \
 	$(BUILD_DIR)/kernel/vfs.o \
+	$(BUILD_DIR)/kernel/setup.o \
 	$(BUILD_DIR)/kernel/ata.o \
+	$(BUILD_DIR)/kernel/ahci.o \
 	$(BUILD_DIR)/kernel/pci.o \
 	$(BUILD_DIR)/kernel/rtl8139.o \
+	$(BUILD_DIR)/kernel/net_device.o \
 	$(BUILD_DIR)/kernel/net.o \
 	$(BUILD_DIR)/kernel/acpi.o \
 	$(BUILD_DIR)/kernel/dbg.o \
+	$(BUILD_DIR)/kernel/jit.o \
 	$(BUILD_DIR)/kernel/spx.o \
 	$(BUILD_DIR)/kernel/bmp.o \
+	$(BUILD_DIR)/kernel/doom_wad.o \
 	$(BUILD_DIR)/gui/gui.o \
+	$(BUILD_DIR)/gui/solis_ui_engine.o \
 	$(BUILD_DIR)/gui/login.o \
+	$(BUILD_DIR)/gui/setup_wizard.o \
+	$(BUILD_DIR)/gui/boot.o \
 	$(BUILD_DIR)/window_manager/window_manager.o \
 	$(BUILD_DIR)/desktop/desktop.o \
 	$(BUILD_DIR)/kernel/arch/x86_64/interrupts.o \
@@ -72,7 +88,10 @@ SPX_EMBED_OBJS := \
 	$(SPX_DIR)/pkg_spx_embed.o \
 	$(SPX_DIR)/editor_spx_embed.o \
 	$(SPX_DIR)/tetris_spx_embed.o \
-	$(SPX_DIR)/blocks_spx_embed.o
+	$(SPX_DIR)/blocks_spx_embed.o \
+	$(SPX_DIR)/calculator_spx_embed.o
+
+SPX_EMBED_OBJS += $(SPX_DIR)/doom_spx_embed.o
 
 all: $(BUILD_DIR)/solis.iso pkg-spx
 
@@ -80,6 +99,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)/boot $(BUILD_DIR)/kernel/arch/x86_64
 	mkdir -p $(BUILD_DIR)/gui $(BUILD_DIR)/window_manager
 	mkdir -p $(BUILD_DIR)/desktop $(BUILD_DIR)/apps
+	mkdir -p $(BUILD_DIR)/doom/solis
 
 $(SPX_DIR):
 	mkdir -p $(SPX_DIR)
@@ -101,6 +121,9 @@ $(BUILD_DIR)/kernel/usermode.o: $(KERNEL_DIR)/usermode.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/user_elf.o: $(KERNEL_DIR)/user_elf.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/task.o: $(KERNEL_DIR)/task.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/console.o: $(KERNEL_DIR)/console.c | $(BUILD_DIR)
@@ -130,6 +153,9 @@ $(BUILD_DIR)/kernel/mouse.o: $(KERNEL_DIR)/mouse.c | $(BUILD_DIR)
 $(BUILD_DIR)/kernel/pointer.o: $(KERNEL_DIR)/pointer.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kernel/usb.o: $(KERNEL_DIR)/usb.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel/i2c.o: $(KERNEL_DIR)/i2c.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -151,13 +177,22 @@ $(BUILD_DIR)/kernel/solfs.o: $(KERNEL_DIR)/solfs.c | $(BUILD_DIR)
 $(BUILD_DIR)/kernel/vfs.o: $(KERNEL_DIR)/vfs.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kernel/setup.o: $(KERNEL_DIR)/setup.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel/apic.o: $(KERNEL_DIR)/apic.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/ata.o: $(KERNEL_DIR)/ata.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kernel/ahci.o: $(KERNEL_DIR)/ahci.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel/dbg.o: $(KERNEL_DIR)/dbg.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/jit.o: $(KERNEL_DIR)/jit.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/spx.o: $(KERNEL_DIR)/spx.c | $(BUILD_DIR)
@@ -166,10 +201,16 @@ $(BUILD_DIR)/kernel/spx.o: $(KERNEL_DIR)/spx.c | $(BUILD_DIR)
 $(BUILD_DIR)/kernel/bmp.o: $(KERNEL_DIR)/bmp.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kernel/doom_wad.o: $(KERNEL_DIR)/doom_wad.S $(DOOM_DIR)/doom1.wad | $(BUILD_DIR)
+	$(AS) $(ASFLAGS) -o $@ $<
+
 $(BUILD_DIR)/kernel/pci.o: $(KERNEL_DIR)/pci.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/rtl8139.o: $(KERNEL_DIR)/rtl8139.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/net_device.o: $(KERNEL_DIR)/net_device.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/net.o: $(KERNEL_DIR)/net.c | $(BUILD_DIR)
@@ -181,7 +222,16 @@ $(BUILD_DIR)/kernel/acpi.o: $(KERNEL_DIR)/acpi.c | $(BUILD_DIR)
 $(BUILD_DIR)/gui/gui.o: $(GUI_DIR)/gui.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/gui/solis_ui_engine.o: $(GUI_DIR)/solis_ui_engine.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/gui/login.o: $(GUI_DIR)/login.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gui/setup_wizard.o: $(GUI_DIR)/setup_wizard.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gui/boot.o: $(GUI_DIR)/boot.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/window_manager/window_manager.o: $(WINDOW_MANAGER_DIR)/window_manager.c | $(BUILD_DIR)
@@ -196,12 +246,16 @@ $(BUILD_DIR)/kernel/arch/x86_64/interrupts.o: $(KERNEL_DIR)/arch/x86_64/interrup
 $(BUILD_DIR)/kernel/arch/x86_64/usermode_entry.o: $(KERNEL_DIR)/arch/x86_64/usermode.asm | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) -o $@ $<
 
-# Minimal statically linked ELF64 program used to exercise ring-3 loading.
-$(BUILD_DIR)/user_test.o: tests/user/user_test.asm | $(BUILD_DIR)
+# Tiny freestanding C user program used to exercise ring-3 syscalls and
+# timer-driven preemption. It deliberately avoids libc and compiler runtime.
+$(BUILD_DIR)/user_test.o: tests/user/user_test.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -mcmodel=large -c $< -o $@
+
+$(BUILD_DIR)/user_start.o: tests/user/user_start.asm | $(BUILD_DIR)
 	$(AS) $(ASFLAGS) -o $@ $<
 
-$(BUILD_DIR)/user_test.elf: $(BUILD_DIR)/user_test.o tests/user/user_test.ld
-	$(LD) -m elf_x86_64 -T tests/user/user_test.ld -nostdlib -z noexecstack -o $@ $<
+$(BUILD_DIR)/user_test.elf: $(BUILD_DIR)/user_test.o $(BUILD_DIR)/user_start.o tests/user/user_test.ld
+	$(LD) -m elf_x86_64 -T tests/user/user_test.ld -nostdlib -z noexecstack -o $@ $(BUILD_DIR)/user_start.o $(BUILD_DIR)/user_test.o
 
 $(BUILD_DIR)/user_test_embed.o: $(BUILD_DIR)/user_test.elf
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $< $@
@@ -213,7 +267,10 @@ $(BUILD_DIR)/user_test_embed.o: $(BUILD_DIR)/user_test.elf
 $(SPX_DIR)/terminal.o: $(APPS_DIR)/terminal.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SPX_DIR)/cinterp_terminal.o: $(APPS_DIR)/cinterp.c | $(SPX_DIR)
+$(SPX_DIR)/ccompiler_terminal.o: $(APPS_DIR)/ccompiler.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/lua_terminal.o: $(APPS_DIR)/lua.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/glue_terminal.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
@@ -222,7 +279,7 @@ $(SPX_DIR)/glue_terminal.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
 $(SPX_DIR)/terminal_spx_stub.o: $(APPS_DIR)/terminal_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SPX_DIR)/terminal.elf: $(SPX_DIR)/terminal.o $(SPX_DIR)/cinterp_terminal.o $(SPX_DIR)/glue_terminal.o $(SPX_DIR)/terminal_spx_stub.o
+$(SPX_DIR)/terminal.elf: $(SPX_DIR)/terminal.o $(SPX_DIR)/ccompiler_terminal.o $(SPX_DIR)/lua_terminal.o $(SPX_DIR)/glue_terminal.o $(SPX_DIR)/terminal_spx_stub.o
 	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01000000 -o $@ $^
 
 $(SPX_DIR)/terminal.bin: $(SPX_DIR)/terminal.elf
@@ -432,6 +489,48 @@ $(SPX_DIR)/blocks.spx: $(SPX_DIR)/blocks.bin tools/mkspx.py
 $(SPX_DIR)/blocks_spx_embed.o: $(SPX_DIR)/blocks.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
 
+# --- Calculator ---
+$(SPX_DIR)/calculator.o: $(APPS_DIR)/calculator.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/glue_calculator.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/calculator_spx_stub.o: $(APPS_DIR)/calculator_spx.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/calculator.elf: $(SPX_DIR)/calculator.o $(SPX_DIR)/glue_calculator.o $(SPX_DIR)/calculator_spx_stub.o
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02400000 -o $@ $^
+
+$(SPX_DIR)/calculator.bin: $(SPX_DIR)/calculator.elf
+	$(OBJCOPY) -O binary $< $@
+
+$(SPX_DIR)/calculator.spx: $(SPX_DIR)/calculator.bin tools/mkspx.py
+	python3 tools/mkspx.py $< Calculator $@
+
+$(SPX_DIR)/calculator_spx_embed.o: $(SPX_DIR)/calculator.spx
+	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
+
+# --- Doom (Extra edition) ---
+# Doom is a normal SPX app with its own private heap at 64 MiB. Its WAD is
+# embedded once in the kernel and exposed through the syscall table, so it is
+# not duplicated in every app or in the filesystem image.
+$(BUILD_DIR)/doom/%.o: $(DOOM_DIR)/%.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(DOOM_CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/doom.elf: $(DOOM_OBJS) apps/link_app.ld
+	$(LD) -m elf_x86_64 -T apps/link_app.ld -nostdlib --defsym BASE=0x02600000 -o $@ $(DOOM_OBJS)
+
+$(SPX_DIR)/doom.bin: $(SPX_DIR)/doom.elf
+	$(OBJCOPY) --set-section-flags .bss=alloc,load,contents -O binary $< $@
+
+$(SPX_DIR)/doom.spx: $(SPX_DIR)/doom.bin tools/mkspx.py
+	python3 tools/mkspx.py $< Doom $@
+
+$(SPX_DIR)/doom_spx_embed.o: $(SPX_DIR)/doom.spx
+	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
+
 # Copy .spx files to pkg/ repo directories
 $(PKG_DIR)/taskmanager/taskmanager.spx: $(SPX_DIR)/taskmanager.spx
 	cp $< $@
@@ -471,20 +570,42 @@ $(BUILD_DIR)/solis.iso: $(BUILD_DIR)/solis.kernel boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(BUILD_DIR)/isofiles >/dev/null 2>&1
 
 # Disk with pre-loaded packages
-$(BUILD_DIR)/disk.img: pkg-spx tools/mksolfs.py
-	python3 tools/mksolfs.py pkg/ $@
+$(BUILD_DIR)/disk.img: pkg-spx $(BUILD_DIR)/user_test.elf tools/mksolfs.py
+	python3 tools/mksolfs.py pkg/ $@ $(BUILD_DIR)/user_test.elf
 
-$(BUILD_DIR)/disk.vdi: $(BUILD_DIR)/disk.img
-	VBoxManage convertfromraw $(BUILD_DIR)/disk.img $(BUILD_DIR)/disk.vdi 2>/dev/null || \
-	  echo "Install VirtualBox or run: VBoxManage convertfromraw build/disk.img build/disk.vdi"
+$(BUILD_DIR)/solis.vdi: $(BUILD_DIR)/disk.img
+	@if command -v VBoxManage >/dev/null 2>&1; then \
+		VBoxManage convertfromraw $(BUILD_DIR)/disk.img $@; \
+	elif command -v qemu-img >/dev/null 2>&1; then \
+		qemu-img convert -f raw -O vdi $(BUILD_DIR)/disk.img $@; \
+	else \
+		echo "Install VirtualBox (VBoxManage) or QEMU (qemu-img) to create build/solis.vdi."; \
+		exit 1; \
+	fi
 
-vbox-disk: $(BUILD_DIR)/disk.vdi
+vbox-disk: $(BUILD_DIR)/solis.vdi
+
+# A blank disk for testing first-boot formatting. Attach this instead of
+# build/disk.img in VirtualBox; Solis Setup formats it on install.
+blank-vdi:
+	@bash tools/make-blank-vdi.sh
+
+# A self-booting UEFI disk: FAT32 ESP (GRUB + kernel) plus a SolFS partition.
+# No ISO is needed when the VM is configured for EFI firmware.
+$(BUILD_DIR)/solis-uefi.vdi: $(BUILD_DIR)/solis.kernel $(BUILD_DIR)/user_test.elf pkg-spx \
+		tools/make-bootable-vdi.sh boot/grub/grub-uefi.cfg
+	bash tools/make-bootable-vdi.sh
+
+boot-vdi: $(BUILD_DIR)/solis-uefi.vdi
 
 QEMU_VGA ?= -vga std
 QEMU_DISPLAY ?= gtk,grab-on-hover=on
 
 run: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 	qemu-system-x86_64 $(QEMU_VGA) -display $(QEMU_DISPLAY) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nic user,model=rtl8139
+
+run-usb: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
+	qemu-system-x86_64 $(QEMU_VGA) -display $(QEMU_DISPLAY) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 -device usb-mouse,bus=xhci.0 -nic user,model=rtl8139
 
 run-x11: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 	GDK_BACKEND=x11 qemu-system-x86_64 $(QEMU_VGA) -display $(QEMU_DISPLAY) -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -nic user,model=rtl8139
@@ -510,4 +631,4 @@ run-dbg: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all get run run-x11 run-sdl run-serial run-x11-serial run-sdl-serial run-nographic run-dbg clean vbox-disk
+.PHONY: all get run run-x11 run-sdl run-serial run-x11-serial run-sdl-serial run-nographic run-dbg clean vbox-disk blank-vdi boot-vdi

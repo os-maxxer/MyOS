@@ -1,14 +1,15 @@
 #include <solis/graphics.h>
 #include <solis/timer.h>
 #include <solis/spx.h>
-#include <stdbool.h>
+#include <solis/solfs.h>
 
 #define LINE_H 16
 #define COLS 60
 
 static char lines[32][COLS];
 static int line_count;
-static bool dirty;
+static uint32_t last_tick_second;
+static int taskman_paused = 0;
 
 static void clear_screen(void) {
     for (int i = 0; i < 32; i++)
@@ -90,13 +91,18 @@ static void uptime_str(char *buf) {
 
 void taskman_init(void) {
     clear_screen();
-    dirty = true;
+    last_tick_second = timer_get_ticks() / 100;
+}
+
+int taskman_tick(void) {
+    if (taskman_paused) return 0;
+    uint32_t second = timer_get_ticks() / 100;
+    if (second == last_tick_second) return 0;
+    last_tick_second = second;
+    return 1;
 }
 
 void taskman_draw(int x, int y, int w, int h) {
-    if (!dirty) return;
-    dirty = false;
-
     clear_screen();
 
     char buf[64];
@@ -157,6 +163,31 @@ void taskman_draw(int x, int y, int w, int h) {
     buf[bi] = '\0';
     add_line(buf);
 
+    uint64_t disk_total = solfs_get_total_bytes();
+    uint64_t disk_free = solfs_get_free_bytes();
+    if (solfs_is_mounted() && disk_total > 0) {
+        char total_str[16], free_str[16];
+        uint32_to_str((uint32_t)(disk_total / (1024 * 1024)), total_str);
+        uint32_to_str((uint32_t)(disk_free / (1024 * 1024)), free_str);
+        bi = 0;
+        {
+            const char *p = "SolFS: ";
+            while (*p) buf[bi++] = *p++;
+            const char *s = total_str;
+            while (*s && bi < 60) buf[bi++] = *s++;
+            const char *p2 = " MB, ";
+            while (*p2 && bi < 60) buf[bi++] = *p2++;
+            s = free_str;
+            while (*s && bi < 60) buf[bi++] = *s++;
+            const char *p3 = " MB free";
+            while (*p3 && bi < 60) buf[bi++] = *p3++;
+        }
+        buf[bi] = '\0';
+        add_line(buf);
+    } else {
+        add_line("SolFS: memory filesystem");
+    }
+
     add_line("--------------------");
     add_line("Installed Apps:");
 
@@ -177,7 +208,7 @@ void taskman_draw(int x, int y, int w, int h) {
     }
 
     add_line("");
-    add_line("Press ESC to close");
+    add_line(taskman_paused ? "Paused - P resumes | ESC closes" : "P pauses | ESC closes");
 
     int rows = (h - 8) / LINE_H;
     if (rows > line_count) rows = line_count;
@@ -192,6 +223,10 @@ void taskman_draw(int x, int y, int w, int h) {
 }
 
 void taskman_handle_key(char key) {
-    if (key == 0x1b) return;
-    dirty = true;
+    if (key == 'p' || key == 'P') {
+        taskman_paused = !taskman_paused;
+        last_tick_second = timer_get_ticks() / 100 - 1;
+    } else if (key == 'r' || key == 'R') {
+        last_tick_second = timer_get_ticks() / 100 - 1;
+    }
 }

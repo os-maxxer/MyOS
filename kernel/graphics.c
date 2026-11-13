@@ -547,6 +547,43 @@ void graphics_blit_rgb(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     }
 }
 
+void graphics_blit_rgb_scaled(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                              const uint32_t *src, uint32_t src_w,
+                              uint32_t src_h) {
+    if (!framebuffer.present || !src || w == 0 || h == 0 ||
+        src_w == 0 || src_h == 0)
+        return;
+    if (x >= framebuffer_width || y >= framebuffer_height) return;
+    if (x + w > framebuffer_width) w = framebuffer_width - x;
+    if (y + h > framebuffer_height) h = framebuffer_height - y;
+    if (!clip_rect(&x, &y, &w, &h)) return;
+
+    if (framebuffer.bytes_per_pixel == 4) {
+        volatile uint32_t *row =
+            (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x;
+        uint32_t pitch_words = framebuffer.pitch / 4;
+        for (uint32_t r = 0; r < h; r++) {
+            uint32_t sy = (uint32_t)((uint64_t)r * src_h / h);
+            const uint32_t *src_row = src + sy * src_w;
+            for (uint32_t c = 0; c < w; c++) {
+                uint32_t sx = (uint32_t)((uint64_t)c * src_w / w);
+                row[c] = src_row[sx];
+            }
+            pixel_writes += w;
+            row += pitch_words;
+        }
+    } else {
+        for (uint32_t r = 0; r < h; r++) {
+            uint32_t sy = (uint32_t)((uint64_t)r * src_h / h);
+            const uint32_t *src_row = src + sy * src_w;
+            for (uint32_t c = 0; c < w; c++) {
+                uint32_t sx = (uint32_t)((uint64_t)c * src_w / w);
+                graphics_put_pixel(x + c, y + r, src_row[sx]);
+            }
+        }
+    }
+}
+
 void graphics_draw_mouse_cursor(uint32_t x, uint32_t y, uint32_t color) {
     if (!framebuffer.present) return;
     static const uint16_t arrow[16] = {

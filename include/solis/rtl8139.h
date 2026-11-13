@@ -10,7 +10,7 @@
 #define TX_BUF_SIZE 1536
 
 int  rtl8139_init(uint16_t io_base);
-void rtl8139_send(const uint8_t *data, uint32_t len);
+int  rtl8139_send(const uint8_t *data, uint32_t len);
 int  rtl8139_recv(uint8_t *buf, uint32_t max);
 void rtl8139_get_mac(uint8_t *mac);
 

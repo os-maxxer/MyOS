@@ -77,7 +77,10 @@ static void serial_init(void) {
 
 static void serial_putc(char c) {
     if (!serial_ok) return;
-    while (!(inb(0x3F8 + 5) & 0x20));
+    /* A missing or wedged UART must not hang the whole kernel while logging. */
+    uint32_t timeout = 100000;
+    while (!(inb(0x3F8 + 5) & 0x20) && --timeout) { }
+    if (!timeout) return;
     outb(0x3F8, c);
 }
 

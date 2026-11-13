@@ -8,6 +8,9 @@
 #define PMM_DIRECT_MAP_LIMIT (512ULL * 1024 * 1024 * 1024)
 
 bool pmm_init(uintptr_t multiboot_info);
+/* Remove a fixed physical range from the allocator. Used for the Doom zone
+ * so ordinary driver allocations can never land inside it. */
+bool pmm_reserve(uint64_t start, uint64_t end);
 void *pmm_alloc_page(void);
 bool pmm_free_page(void *page);
 /* Usable RAM managed below the boot identity-map limit, including reservations. */

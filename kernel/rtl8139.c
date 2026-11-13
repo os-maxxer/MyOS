@@ -1,5 +1,4 @@
 #include <solis/rtl8139.h>
-#include <solis/pci.h>
 #include <solis/ports.h>
 #include <solis/console.h>
 #include <solis/dbg.h>
@@ -37,6 +36,16 @@ static bool rtl8139_dma_address(const void *buffer, uint32_t size, uint32_t *add
 #define RCR_WRAP     (1 << 7)
 #define RCR_64K      (3 << 13)
 
+static void rtl8139_release_rx(uint32_t frame_len) {
+    volatile uint8_t *header = rx_ring + rx_offset;
+    *(volatile uint16_t *)header = 0;
+    *(volatile uint16_t *)(header + 2) = 0;
+
+    rx_offset = (rx_offset + 4 + frame_len + 3) & ~3;
+    if (rx_offset >= RX_BUF_SIZE) rx_offset = 0;
+    outw(io + RTL_REG_CAPR, (uint16_t)(rx_offset - 0x10));
+}
+
 int rtl8139_init(uint16_t io_base) {
     uint32_t rbaddr;
     if (!rtl8139_dma_address(rx_ring, sizeof(rx_ring), &rbaddr)) {
@@ -45,9 +54,6 @@ int rtl8139_init(uint16_t io_base) {
     }
 
     io = io_base;
-
-    pci_write_config(0, pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID),
-                     0, 0x04, 0x05);
 
     dbg_print("[RTL8139] Init IO=0x");
     dbg_print_hex(io);
@@ -58,6 +64,11 @@ int rtl8139_init(uint16_t io_base) {
     while ((inb(io + RTL_REG_CR) & CR_RESET) && reset_retries < 1000) {
         io_wait();
         reset_retries++;
+    }
+    if (inb(io + RTL_REG_CR) & CR_RESET) {
+        dbg_print("[RTL8139] Reset timed out\n");
+        io = 0;
+        return -1;
     }
     dbg_print("[RTL8139] Reset done\n");
 
@@ -99,13 +110,15 @@ void rtl8139_get_mac(uint8_t *mac) {
         mac[i] = inb(io + RTL_REG_MAC + i);
 }
 
-void rtl8139_send(const uint8_t *data, uint32_t len) {
-    if (len > TX_BUF_SIZE) len = TX_BUF_SIZE;
+int rtl8139_send(const uint8_t *data, uint32_t len) {
+    if (!io || !data || len == 0 || len > TX_BUF_SIZE)
+        return -1;
+
     int idx = tx_cur % 4;
     uint32_t addr;
     if (!rtl8139_dma_address(tx_bufs[idx], len, &addr)) {
         dbg_print("[RTL8139] TX buffer exceeds 32-bit DMA address range\n");
-        return;
+        return -1;
     }
 
     for (uint32_t i = 0; i < len; i++)
@@ -123,32 +136,41 @@ void rtl8139_send(const uint8_t *data, uint32_t len) {
     dbg_print("\n");
 
     tx_cur++;
+    return 0;
 }
 
 int rtl8139_recv(uint8_t *buf, uint32_t max) {
+    if (!io || !buf || max < 14)
+        return -1;
+
     volatile uint8_t *vrx = rx_ring;
     uint16_t rx_status = *(volatile uint16_t*)(vrx + rx_offset);
     uint16_t rx_size   = *(volatile uint16_t*)(vrx + rx_offset + 2);
 
-    if (!(rx_status & 0x0001)) {
+    if (rx_status == 0) {
         io_wait();
         return 0;
     }
 
     uint32_t frame_len = rx_size & 0x3FFF;
-    if (rx_offset + frame_len + 4 > RX_BUF_SIZE) {
-        dbg_print("[RTL8139] RX wrap: resetting offset\n");
+    if (frame_len < 4 || frame_len > 0x3FFF ||
+        rx_offset + frame_len + 4 > RX_BUF_SIZE) {
+        dbg_print("[RTL8139] Invalid RX frame; resetting ring offset\n");
+        *(volatile uint16_t*)(vrx + rx_offset) = 0;
+        *(volatile uint16_t*)(vrx + rx_offset + 2) = 0;
         rx_offset = 0;
+        outw(io + RTL_REG_CAPR, 0xFFF0);
         return 0;
     }
 
     uint32_t pkt_start = rx_offset + 4;
     uint32_t pkt_len = frame_len - 4;
-    if (pkt_len > max) pkt_len = max;
-    if (pkt_len < 14) {
-        dbg_print("[RTL8139] RX too short\n");
+    if (!(rx_status & 0x0001) || pkt_len < 14) {
+        rtl8139_release_rx(frame_len);
         return 0;
     }
+
+    if (pkt_len > max) pkt_len = max;
 
     dbg_print("[RTL8139] RX status=0x");
     dbg_print_hex(rx_status);
@@ -163,12 +185,6 @@ int rtl8139_recv(uint8_t *buf, uint32_t max) {
     for (uint32_t i = 0; i < pkt_len; i++)
         buf[i] = vrx[pkt_start + i];
 
-    *(volatile uint16_t*)(vrx + rx_offset) = 0;
-    *(volatile uint16_t*)(vrx + rx_offset + 2) = 0;
-
-    rx_offset = (rx_offset + 4 + frame_len + 3) & ~3;
-    if (rx_offset >= RX_BUF_SIZE) rx_offset = 0;
-
-    outw(io + RTL_REG_CAPR, rx_offset - 0x10);
+    rtl8139_release_rx(frame_len);
     return (int)pkt_len;
 }

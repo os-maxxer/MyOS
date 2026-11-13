@@ -86,9 +86,24 @@ def collect_packages(pkg_dir):
     return packages
 
 
-def create_disk(pkg_dir, output_path):
+def create_disk(pkg_dir, output_path, user_elf=None):
     # Packages always take precedence over any same-named existing entry.
     files = [(name, data, 0) for name, data in collect_packages(pkg_dir).items()]
+
+    if user_elf:
+        if not os.path.isfile(user_elf):
+            print(f"Error: user ELF does not exist: {user_elf}")
+            sys.exit(1)
+        with open(user_elf, 'rb') as f:
+            elf_data = f.read()
+        if not elf_data:
+            print(f"Error: user ELF is empty: {user_elf}")
+            sys.exit(1)
+        if len(elf_data) > SOLFS_MAX_FILE_SIZE:
+            print(f"Error: user ELF exceeds SOLFS size limit: {user_elf}")
+            sys.exit(1)
+        files = [item for item in files if item[0] != 'hello.elf']
+        files.append(('hello.elf', elf_data, 0))
 
     # Preserve user files and directories from an existing image.
     for name, (data, attrs) in load_existing_disk(output_path).items():
@@ -194,7 +209,8 @@ def create_disk(pkg_dir, output_path):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <pkg_directory> <output_image>")
+    if len(sys.argv) not in (3, 4):
+        print(f"Usage: {sys.argv[0]} <pkg_directory> <output_image> [user_elf]")
         sys.exit(1)
-    create_disk(sys.argv[1], sys.argv[2])
+    create_disk(sys.argv[1], sys.argv[2],
+                sys.argv[3] if len(sys.argv) == 4 else None)

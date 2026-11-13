@@ -5,5 +5,8 @@ void blocks_init(void);
 void blocks_draw(int x, int y, int w, int h);
 void blocks_handle_key(char key);
 void blocks_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y);
+void blocks_handle_context(int x, int y, int w, int h, int mouse_x, int mouse_y);
+int blocks_tick(void);
+void blocks_get_size(int *w, int *h);
 
 #endif

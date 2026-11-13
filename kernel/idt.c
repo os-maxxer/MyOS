@@ -8,6 +8,7 @@
 #include <solis/dbg.h>
 #include <solis/vmm.h>
 #include <solis/usermode.h>
+#include <solis/task.h>
 
 struct idt_entry {
     uint16_t base_low;
@@ -161,7 +162,6 @@ void idt_init(void) {
 static void (*irq_handlers[16])(void) = {0};
 
 extern void kernel_panic(const char *message) __attribute__((noreturn));
-extern void arch_exit_user(uint64_t status) __attribute__((noreturn));
 
 static const char *exception_name(uint64_t vector) {
     static const char *const names[32] = {
@@ -190,29 +190,54 @@ void irq_register_handler(uint8_t irq, void (*handler)(void)) {
     }
 }
 
-void isr_common_handler(struct registers *regs) {
-    if (regs->int_no == 3) return;
+struct registers *isr_common_handler(struct registers *regs) {
+    if (regs->int_no == 3) return regs;
     if (regs->int_no == 128) {
         if ((regs->cs & 3) != 3) {
             regs->rax = UINT64_MAX;
-            return;
+            return regs;
         }
         if (regs->rax == SOLIS_SYSCALL_EXIT)
-            arch_exit_user(regs->rdi);
+            return task_exit(regs, regs->rdi);
         if (regs->rax == SOLIS_SYSCALL_WRITE) {
             char buffer[SOLIS_SYSCALL_MAX_WRITE];
             if (regs->rsi > sizeof(buffer) ||
                 !vmm_copy_from_user(buffer, regs->rdi, regs->rsi)) {
                 regs->rax = UINT64_MAX;
-                return;
+                return regs;
             }
             for (uint64_t i = 0; i < regs->rsi; i++)
                 console_putc(buffer[i]);
             regs->rax = regs->rsi;
-            return;
+            return regs;
+        }
+        if (regs->rax == SOLIS_SYSCALL_YIELD)
+            return task_yield(regs);
+        if (regs->rax == SOLIS_SYSCALL_GETPID) {
+            regs->rax = task_current_pid();
+            return regs;
+        }
+        if (regs->rax == SOLIS_SYSCALL_SPAWN) {
+            regs->rax = task_spawn_from_user(regs->rdi);
+            return regs;
+        }
+        if (regs->rax == SOLIS_SYSCALL_WAIT)
+            return task_wait(regs, regs->rdi);
+        if (regs->rax == SOLIS_SYSCALL_OPEN) {
+            regs->rax = task_open_file_from_user(regs->rdi);
+            return regs;
+        }
+        if (regs->rax == SOLIS_SYSCALL_READ) {
+            regs->rax = task_read_file_from_user(regs->rdi, regs->rsi,
+                                                 regs->rdx);
+            return regs;
+        }
+        if (regs->rax == SOLIS_SYSCALL_CLOSE) {
+            regs->rax = task_close_file_from_user(regs->rdi);
+            return regs;
         }
         regs->rax = UINT64_MAX;
-        return;
+        return regs;
     }
 
     console_write("[FAULT] ");
@@ -254,14 +279,25 @@ void isr_common_handler(struct registers *regs) {
         console_write("\n");
     }
 
+    if ((regs->cs & 3) == 3) {
+        console_write("[TASK] terminating user process pid=");
+        console_write_dec(task_current_pid());
+        console_write(" after ");
+        console_write(exception_name(regs->int_no));
+        console_write("\n");
+        return task_exit(regs, 128 + regs->int_no);
+    }
+
     kernel_panic("Unhandled CPU exception");
 }
 
-void irq_common_handler(struct registers *regs) {
-    if (regs->int_no < 32 || regs->int_no >= 48) return;
+struct registers *irq_common_handler(struct registers *regs) {
+    if (!regs || regs->int_no < 32 || regs->int_no >= 48) return regs;
     uint8_t irq = (uint8_t)(regs->int_no - 32);
     dbg_note_irq(irq);
     if (irq < 16 && irq_handlers[irq]) {
         irq_handlers[irq]();
     }
+    if (irq == 0) return task_preempt(regs);
+    return regs;
 }

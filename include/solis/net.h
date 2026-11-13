@@ -16,10 +16,14 @@
 #define HTTP_PORT 80
 
 int  net_init(void);
+int  net_configure_dhcp(void);
 int  net_available(void);
+const char *net_get_device_name(void);
+int  net_wifi_adapter_present(void);
 void net_flush_rx(void);
 void net_get_ip(uint8_t *ip);
 void net_get_gateway(uint8_t *gw);
+void net_get_dns(uint8_t *ip);
 int  net_is_local_ip(const uint8_t *ip);
 
 int net_arp_resolve(const uint8_t *target_ip, uint8_t *target_mac);

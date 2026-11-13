@@ -163,6 +163,10 @@ static bool pmm_reserve_range(uint64_t start, uint64_t end) {
     return true;
 }
 
+bool pmm_reserve(uint64_t start, uint64_t end) {
+    return pmm_reserve_range(start, end);
+}
+
 static bool pmm_parse_multiboot(uintptr_t multiboot_info, uint32_t total_size) {
     const uint8_t *info = (const uint8_t *)multiboot_info;
     uint32_t offset = 8;

@@ -39,7 +39,32 @@ static int32_t mouse_frac_y = 0;
  * carries no usable value, so both axes are simply dropped when their
  * overflow bit is set. Synthesising +/-127 instead is what made the pointer
  * teleport across the screen. */
-/* Feed one AUX byte through the 3-byte packet state machine. */
+static void mouse_process_packet(void) {
+    int32_t dx = (int32_t)(int8_t)mouse_byte[1];
+    int32_t dy = -(int32_t)(int8_t)mouse_byte[2];
+    uint8_t buttons = mouse_byte[0] & 0x07;
+    if (mouse_byte[0] & 0x40) dx = 0;  /* X overflow */
+    if (mouse_byte[0] & 0x80) dy = 0;  /* Y overflow */
+    if (dx || dy) {
+        mouse_dx += dx;
+        mouse_dy += dy;
+        mouse_updated = true;
+    }
+    if (buttons != mouse_buttons) mouse_updated = true;
+    mouse_buttons = buttons;
+    if (mouse_has_wheel) {
+        /* 4-bit two's complement in the low nibble, with the upper bits
+         * repeating the sign. */
+        int8_t wheel = (int8_t)(mouse_byte[3] & 0x0F);
+        if (wheel & 0x08) wheel = (int8_t)(wheel | 0xF0);
+        if (wheel) {
+            mouse_wheel += wheel;
+            mouse_updated = true;
+        }
+    }
+}
+
+/* Feed one AUX byte through the 3- or 4-byte packet state machine. */
 static void mouse_consume(uint8_t data) {
     /* Command acknowledgements share the AUX stream. Treat one as a
      * resync point so it can never be mistaken for a packet header. */
@@ -65,36 +90,17 @@ static void mouse_consume(uint8_t data) {
             break;
         case 2:
             mouse_byte[2] = data;
-            /* Intellimouse adds a 4th byte carrying the wheel. Reading it
-             * unconditionally keeps the packet phase aligned whether or not
-             * the device actually sends one. */
-            mouse_cycle = 3;
+            if (!mouse_has_wheel) {
+                mouse_cycle = 0;
+                mouse_process_packet();
+            } else {
+                mouse_cycle = 3;
+            }
             break;
         case 3:
             mouse_byte[3] = data;
             mouse_cycle = 0;
-            {
-                int32_t dx = (int32_t)(int8_t)mouse_byte[1];
-                int32_t dy = -(int32_t)(int8_t)mouse_byte[2];
-                if (mouse_byte[0] & 0x40) dx = 0;  /* X overflow */
-                if (mouse_byte[0] & 0x80) dy = 0;  /* Y overflow */
-                if (dx || dy) {
-                    mouse_dx += dx;
-                    mouse_dy += dy;
-                    mouse_updated = true;
-                }
-                if (mouse_has_wheel) {
-                    /* 4-bit two's complement in the low nibble, with the
-                     * upper bits repeating the sign. */
-                    int8_t wheel = (int8_t)(mouse_byte[3] & 0x0F);
-                    if (wheel & 0x08) wheel = (int8_t)(wheel | 0xF0);
-                    if (wheel) {
-                        mouse_wheel += wheel;
-                        mouse_updated = true;
-                    }
-                }
-                mouse_buttons = mouse_byte[0] & 0x07;
-            }
+            mouse_process_packet();
             break;
     }
 }
@@ -239,6 +245,14 @@ void mouse_get_state(struct mouse_state *state) {
         state->buttons = mouse_buttons;
         state->present = true;
     }
+}
+
+void mouse_submit_usb_report(uint8_t buttons, int8_t dx, int8_t dy) {
+    mouse_dx += dx;
+    mouse_dy -= dy;
+    if ((buttons & 0x07) != mouse_buttons) mouse_updated = true;
+    mouse_buttons = buttons & 0x07;
+    if (dx || dy) mouse_updated = true;
 }
 
 int32_t mouse_take_wheel(void) {

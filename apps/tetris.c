@@ -21,6 +21,8 @@ static int current_y;
 static int current_rot;
 
 static int next_type;
+static int hold_type;
+static int hold_used;
 
 static int drop_counter;
 static int drop_interval;
@@ -125,6 +127,7 @@ static void clear_lines(void) {
 }
 
 static void spawn_piece(void) {
+    hold_used = 0;
     current_type = next_type;
     current_x = COLS / 2 - 2;
     current_y = 0;
@@ -152,6 +155,25 @@ static void move_right(void) {
         current_x++;
 }
 
+static void hold_piece(void) {
+    if (hold_used || game_over || paused) return;
+    int old = current_type;
+    if (hold_type < 0) {
+        hold_type = old;
+        current_type = next_type;
+        next_type = rand_int(7);
+    } else {
+        current_type = hold_type;
+        hold_type = old;
+    }
+    current_x = COLS / 2 - 2;
+    current_y = 0;
+    current_rot = 0;
+    hold_used = 1;
+    if (collides(current_type, current_rot, current_x, current_y))
+        game_over = 1;
+}
+
 static void move_down(void) {
     if (!collides(current_type, current_rot, current_x, current_y + 1)) {
         current_y++;
@@ -162,13 +184,29 @@ static void move_down(void) {
     }
 }
 
+int tetris_tick(void) {
+    if (game_over || paused) return 0;
+    if (++drop_counter < drop_interval) return 0;
+    drop_counter = 0;
+    if (!collides(current_type, current_rot, current_x, current_y + 1)) {
+        current_y++;
+    } else {
+        lock_piece();
+        clear_lines();
+        spawn_piece();
+    }
+    return 1;
+}
+
 void tetris_init(void) {
     for (int r = 0; r < ROWS; r++)
         for (int c = 0; c < COLS; c++)
             grid[r][c] = 0;
     score = 0; level = 0; lines_cleared = 0;
     game_over = 0; paused = 0;
-    drop_interval = 25;
+    hold_type = -1;
+    hold_used = 0;
+    drop_interval = 20;
     drop_counter = 0;
     current_type = rand_int(7);
     next_type = rand_int(7);
@@ -216,20 +254,8 @@ void tetris_draw(int wx, int wy, int w, int h) {
         graphics_fill_rect(grid_x, ly, COLS * BS, 1, 0xFF2A2A4A);
     }
 
-    /* Auto-drop */
-    if (!game_over && !paused) {
-        drop_counter++;
-        if (drop_counter >= drop_interval) {
-            drop_counter = 0;
-            if (!collides(current_type, current_rot, current_x, current_y + 1)) {
-                current_y++;
-            } else {
-                lock_piece();
-                clear_lines();
-                spawn_piece();
-            }
-        }
-    }
+    /* State advances in tetris_tick(); drawing stays read-only so a partial
+     * repaint (for example under the mouse cursor) cannot corrupt the board. */
 
     /* Draw current piece */
     if (!game_over && !paused) {
@@ -307,8 +333,20 @@ void tetris_draw(int wx, int wy, int w, int h) {
     graphics_draw_string(panel_x, panel_y + 208, buf, 0xFFFFFFFF);
 
     /* Controls */
+    graphics_draw_string(panel_x + 62, panel_y, "HOLD", 0xFFAAAAAA);
+    if (hold_type >= 0) {
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++)
+                if (get_block(hold_type, 0, r, c)) {
+                    int bx = panel_x + 62 + c * 12 + 4;
+                    int by = panel_y + 18 + r * 12;
+                    graphics_fill_rect(bx, by, 10, 10, colors[hold_type]);
+                    graphics_draw_rect(bx, by, 10, 10, 0xFF888888);
+                }
+    }
+
     graphics_draw_string(panel_x, panel_y + 240, "WASD/Space", 0xFF888888);
-    graphics_draw_string(panel_x, panel_y + 256, "P=pause  R=restart", 0xFF888888);
+    graphics_draw_string(panel_x, panel_y + 256, "P=pause  H=hold  R=restart", 0xFF888888);
 
     /* Game over overlay */
     if (game_over) {
@@ -349,6 +387,7 @@ void tetris_handle_key(char key) {
         case 'd': case 'D': move_right(); break;
         case 's': case 'S': move_down(); break;
         case 'w': case 'W': rotate_cw(); break;
+        case 'h': case 'H': hold_piece(); break;
         case ' ': hard_drop(); break;
     }
 }

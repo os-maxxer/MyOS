@@ -43,6 +43,8 @@ extern char __bss_start[];
 extern char __bss_end[];
 extern char __frame_stage_start[];
 extern char __frame_stage_end[];
+extern char __user_image_stage_start[];
+extern char __user_image_stage_end[];
 
 static void vmm_cpuid(uint32_t leaf, uint32_t subleaf,
                       uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d) {
@@ -231,6 +233,9 @@ bool vmm_init(void) {
         !vmm_protect_range((uintptr_t)__bss_start, (uintptr_t)__bss_end,
                            VMM_PAGE_WRITABLE | nx) ||
         !vmm_protect_range((uintptr_t)__frame_stage_start, (uintptr_t)__frame_stage_end,
+                           VMM_PAGE_WRITABLE | nx) ||
+        !vmm_protect_range((uintptr_t)__user_image_stage_start,
+                           (uintptr_t)__user_image_stage_end,
                            VMM_PAGE_WRITABLE | nx))
         return false;
     if (!vmm_check_page_flags((uintptr_t)__text_start, ENTRY_PRESENT,
@@ -469,35 +474,47 @@ bool vmm_translate(uintptr_t virtual_address, uint64_t *physical_address) {
     return true;
 }
 
+/* User writes must pass the writable bit at every paging level. */
 static bool vmm_user_translate(uintptr_t virtual_address,
-                               uint64_t *physical_address) {
+                               uint64_t *physical_address,
+                               bool require_writable) {
     if (!page_root || !physical_address ||
         !vmm_valid_user_address(virtual_address))
         return false;
 
     uint64_t entry = page_root[(virtual_address >> 39) & 0x1FF];
-    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
-        (ENTRY_PRESENT | ENTRY_USER))
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER |
+                  (require_writable ? ENTRY_WRITABLE : 0))) !=
+        (ENTRY_PRESENT | ENTRY_USER |
+         (require_writable ? ENTRY_WRITABLE : 0)))
         return false;
     uint64_t *table = vmm_table_from_entry(entry);
     if (!table) return false;
     entry = table[(virtual_address >> 30) & 0x1FF];
-    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
-        (ENTRY_PRESENT | ENTRY_USER) || (entry & ENTRY_LARGE))
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER |
+                  (require_writable ? ENTRY_WRITABLE : 0))) !=
+        (ENTRY_PRESENT | ENTRY_USER |
+         (require_writable ? ENTRY_WRITABLE : 0)) ||
+        (entry & ENTRY_LARGE))
         return false;
 
     table = vmm_table_from_entry(entry);
     if (!table) return false;
     entry = table[(virtual_address >> 21) & 0x1FF];
-    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
-        (ENTRY_PRESENT | ENTRY_USER) || (entry & ENTRY_LARGE))
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER |
+                  (require_writable ? ENTRY_WRITABLE : 0))) !=
+        (ENTRY_PRESENT | ENTRY_USER |
+         (require_writable ? ENTRY_WRITABLE : 0)) ||
+        (entry & ENTRY_LARGE))
         return false;
 
     table = vmm_table_from_entry(entry);
     if (!table) return false;
     entry = table[(virtual_address >> 12) & 0x1FF];
-    if ((entry & (ENTRY_PRESENT | ENTRY_USER)) !=
-        (ENTRY_PRESENT | ENTRY_USER))
+    if ((entry & (ENTRY_PRESENT | ENTRY_USER |
+                  (require_writable ? ENTRY_WRITABLE : 0))) !=
+        (ENTRY_PRESENT | ENTRY_USER |
+         (require_writable ? ENTRY_WRITABLE : 0)))
         return false;
     *physical_address = (entry & physical_address_mask) |
                         (virtual_address & PAGE_MASK);
@@ -513,7 +530,7 @@ bool vmm_copy_from_user(void *destination, uintptr_t source, size_t size) {
     uint8_t *output = (uint8_t *)destination;
     while (size) {
         uint64_t physical_address;
-        if (!vmm_user_translate(source, &physical_address) ||
+        if (!vmm_user_translate(source, &physical_address, false) ||
             physical_address >= VMM_IDENTITY_LIMIT)
             return false;
         size_t chunk = PMM_PAGE_SIZE -
@@ -524,6 +541,45 @@ bool vmm_copy_from_user(void *destination, uintptr_t source, size_t size) {
             output[i] = input[i];
         output += chunk;
         source += chunk;
+        size -= chunk;
+    }
+    return true;
+}
+
+bool vmm_copy_to_user(uintptr_t destination, const void *source, size_t size) {
+    if ((!source && size) ||
+        (size && (!vmm_valid_user_address(destination) ||
+                  size > VMM_USER_SPACE_END - destination)))
+        return false;
+
+    uintptr_t checked_address = destination;
+    size_t remaining = size;
+    while (remaining) {
+        uint64_t physical_address;
+        if (!vmm_user_translate(checked_address, &physical_address, true) ||
+            physical_address >= VMM_IDENTITY_LIMIT)
+            return false;
+        size_t chunk = PMM_PAGE_SIZE -
+                       (size_t)(checked_address & (PMM_PAGE_SIZE - 1));
+        if (chunk > remaining) chunk = remaining;
+        checked_address += chunk;
+        remaining -= chunk;
+    }
+
+    const uint8_t *input = (const uint8_t *)source;
+    while (size) {
+        uint64_t physical_address;
+        if (!vmm_user_translate(destination, &physical_address, true) ||
+            physical_address >= VMM_IDENTITY_LIMIT)
+            return false;
+        size_t chunk = PMM_PAGE_SIZE -
+                       (size_t)(destination & (PMM_PAGE_SIZE - 1));
+        if (chunk > size) chunk = size;
+        uint8_t *output = (uint8_t *)(uintptr_t)physical_address;
+        for (size_t i = 0; i < chunk; i++)
+            output[i] = input[i];
+        input += chunk;
+        destination += chunk;
         size -= chunk;
     }
     return true;

@@ -21,7 +21,7 @@ multiboot_header_end:
 .section .bss
 .align 16
 stack_bottom:
-    .skip 65536
+    .skip 262144
 stack_top:
 
 .align 4096
@@ -109,8 +109,9 @@ _start:
 
     lgdt boot_gdt_ptr
     mov %cr4, %eax
-    or $0x20, %eax
+    or $0x620, %eax          /* PAE + OSFXSR + OSXMMEXCPT for Doom */
     mov %eax, %cr4
+    fninit
 
     mov $boot_pml4, %eax
     mov %eax, %cr3

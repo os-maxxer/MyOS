@@ -16,7 +16,7 @@ def main():
     hdr = struct.pack(
         '<IIIIII12s',
         0x5350580A,  # magic
-        1,            # version
+        2,            # version (2 adds the per-app tick hook)
         len(data),    # code_size
         0,            # bss_size (app uses .bss in loaded segment)
         4096,         # stack_size

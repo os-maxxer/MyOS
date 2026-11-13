@@ -10,6 +10,7 @@
 #include <solis/desktop.h>
 #include <solis/gui.h>
 #include <solis/login.h>
+#include <solis/setup.h>
 #include <solis/timer.h>
 #include <solis/ata.h>
 #include <solis/solfs.h>
@@ -22,6 +23,9 @@
 #include <solis/pmm.h>
 #include <solis/vmm.h>
 #include <solis/usermode.h>
+#include <solis/usb.h>
+#include <solis/boot.h>
+#include <solis/doom.h>
 
 extern char _binary_build_spx_terminal_spx_start[];
 extern char _binary_build_spx_terminal_spx_end[];
@@ -43,6 +47,10 @@ extern char _binary_build_spx_tetris_spx_start[];
 extern char _binary_build_spx_tetris_spx_end[];
 extern char _binary_build_spx_blocks_spx_start[];
 extern char _binary_build_spx_blocks_spx_end[];
+extern char _binary_build_spx_calculator_spx_start[];
+extern char _binary_build_spx_calculator_spx_end[];
+extern char _binary_build_spx_doom_spx_start[];
+extern char _binary_build_spx_doom_spx_end[];
 
 void __attribute__((noreturn)) kernel_panic(const char *message) {
     console_set_color(0x0F, 0x04);
@@ -64,6 +72,10 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
 
     if (!pmm_init(multiboot_info))
         kernel_panic("Physical memory map initialization failed");
+    if (!pmm_reserve(SOLIS_DOOM_HEAP_BASE, SOLIS_DOOM_HEAP_END))
+        kernel_panic("Could not reserve the Doom working set");
+    if (!pmm_reserve(0x08000000ULL, 0x09000000ULL))
+        kernel_panic("Could not reserve the desktop cache region");
     if (!vmm_init())
         kernel_panic("Virtual memory initialization failed");
     console_write("[MEM] 4 KiB allocator and kernel page protections ready; free=");
@@ -72,26 +84,31 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
 
     gdt_init();
     idt_init();
-    usermode_run_self_test();
     pic_remap();
     graphics_init(multiboot_info);
     graphics_vbe_init();
     if (graphics_is_ready()) {
         graphics_clear(0xFF000000);
+        boot_report_begin();
+        boot_report_step("Physical memory and paging ready");
     }
 
     timer_init();
     rtc_init();
+    boot_report_step("Timer and real-time clock online");
 
     ata_init();
     solfs_init();
     vfs_init();
     rtc_load_settings();
+    setup_init();
+    boot_report_step("ATA/AHCI storage and SolFS mounted");
 
     sys_init_ram(multiboot_info);
     sys_init_cpu();
     acpi_init();
     dbg_set_memory_metrics(sys_get_total_ram() * 1024, sys_get_total_ram() * 1024);
+    boot_report_step("ACPI and system services ready");
 
     struct embedded_spx spx_apps[] = {
         {"terminal.spx",
@@ -124,24 +141,49 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
            {"blocks.spx",
             (const uint8_t *)_binary_build_spx_blocks_spx_start,
             (uint32_t)(_binary_build_spx_blocks_spx_end - _binary_build_spx_blocks_spx_start)},
+           {"calculator.spx",
+            (const uint8_t *)_binary_build_spx_calculator_spx_start,
+            (uint32_t)(_binary_build_spx_calculator_spx_end - _binary_build_spx_calculator_spx_start)},
+           {"doom.spx",
+            (const uint8_t *)_binary_build_spx_doom_spx_start,
+            (uint32_t)(_binary_build_spx_doom_spx_end - _binary_build_spx_doom_spx_start)},
     };
-        spx_init(spx_apps, 10);
+        spx_init(spx_apps, (int)(sizeof(spx_apps) / sizeof(spx_apps[0])));
+    if (setup_is_installed()) setup_apply_edition();
+    boot_report_step("SPX application runtime loaded");
 
     keyboard_init();
     pointer_init();
+    boot_report_step("Keyboard and pointer ready");
 
-    net_init();
+    int network_device_ready = net_init();
+    boot_report_step("Network device initialized");
 
 	__asm__ volatile("sti");
+    usb_init();
+    boot_report_step("USB input initialized");
 
+    if (network_device_ready == 0 && net_configure_dhcp() != 0)
+        dbg_print("[NET] DHCP configuration failed; network unavailable\n");
+    boot_report_step("Network stack configured");
+
+    usermode_run_self_test();
     console_clear();
+    boot_report_finish();
 
     if (graphics_is_ready()) {
+        if (!setup_is_installed()) {
+            console_write("[SETUP] no account found; starting installer\n");
+            setup_wizard_run();
+        }
+
         for (;;) {
             console_write("[TRACE] login start\n");
-            login_screen();
+            bool guest = login_screen();
+            gui_set_guest_session(guest);
             console_write("[TRACE] login done\n");
             desktop_init();
+            gui_set_theme(setup_theme());
             console_write("[TRACE] desktop init done\n");
             desktop_redraw();
             console_write("[TRACE] desktop redraw done\n");
@@ -150,6 +192,7 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
             uint32_t last_clock_ticks = 0;
 
             for (;;) {
+                usb_poll();
                 struct pointer_state ps;
                 if (pointer_poll(&ps)) {
                     gui_handle_mouse(ps.dx, ps.dy, ps.buttons);
@@ -167,12 +210,14 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
                 }
 
                 int fk = keyboard_consume_func_key();
-                if (fk >= 1 && fk <= 9) {
+                if (fk >= 1 && fk <= 10) {
                     console_write("[TRACE] FKEY ");
                     console_write_dec(fk);
                     console_write("\n");
                     gui_launch_app(fk - 1);
                 }
+
+                gui_tick();
 
                 if (gui_needs_redraw()) {
                     /* Rate-limit, but never drop the frame: skipping the

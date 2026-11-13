@@ -66,14 +66,14 @@ static void resolve_path(const char *base, const char *input, char *out, int max
             temp[ti++] = base[i];
     }
 
-    if (ti == 0 || temp[ti - 1] != '/')
+    if (ti < max - 1 && (ti == 0 || temp[ti - 1] != '/'))
         temp[ti++] = '/';
 
     for (int i = 0; input[i] && ti < max - 1; i++)
         temp[ti++] = input[i];
     temp[ti] = '\0';
 
-    char segs[16][VFS_MAX_PATH];
+    char segs[32][VFS_MAX_PATH];
     int sc = 0;
     char buf[VFS_MAX_PATH];
     int bi = 0;
@@ -109,7 +109,7 @@ static void resolve_path(const char *base, const char *input, char *out, int max
     for (int i = 0; i < sc; i++) {
         for (int j = 0; segs[i][j] && ti < max - 1; j++)
             temp[ti++] = segs[i][j];
-        if (i < sc - 1) temp[ti++] = '/';
+        if (i < sc - 1 && ti < max - 1) temp[ti++] = '/';
     }
     temp[ti] = '\0';
 
@@ -267,6 +267,10 @@ int vfs_open(const char *path) {
 
 int vfs_read(int fd, uint8_t *buf, uint32_t size) {
     return solfs_read(fd, buf, size);
+}
+
+int vfs_read_at(int fd, uint32_t offset, uint8_t *buf, uint32_t size) {
+    return solfs_read_at(fd, offset, buf, size);
 }
 
 int vfs_write(int fd, const uint8_t *buf, uint32_t size) {

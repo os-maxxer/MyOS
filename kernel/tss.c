@@ -23,3 +23,7 @@ void tss_init(void) {
 const struct x86_64_tss *tss_get(void) {
     return &kernel_tss;
 }
+
+void tss_set_rsp0(uintptr_t stack_top) {
+    kernel_tss.rsp0 = stack_top;
+}

@@ -8,6 +8,7 @@
  */
 
 #include <solis/gui.h>
+#include <solis/solis_ui_engine.h>
 #include <solis/graphics.h>
 #include <solis/console.h>
 #include <solis/mouse.h>
@@ -17,8 +18,11 @@
 #include <solis/spx.h>
 #include <solis/vfs.h>
 #include <solis/rtc.h>
+#include <solis/timer.h>
 #include <solis/ports.h>
 #include <solis/solfs.h>
+#include <solis/setup.h>
+#include <solis/brand.h>
 #include <stdbool.h>
 
 /* ------------------------------------------------------------------ */
@@ -63,22 +67,22 @@
 /* ------------------------------------------------------------------ */
 /* Palette (BoredOS-inspired, ~14 colors)                              */
 /* ------------------------------------------------------------------ */
-#define C_BG          0xFF111522
-#define C_PANEL       0xFF191C28
-#define C_PANEL_LINE  0xFF34384A
-#define C_ACTIVE      0xFF8170F5
-#define C_ACTIVE_DK   0xFF6254D6
-#define C_INACTIVE    0xFF292D3A
-#define C_INACTIVE_DK 0xFF20232E
-#define C_WIN_BG      0xFF191B25
-#define C_TEXT        0xFFF4F2FA
-#define C_TEXT_DIM    0xFFAAAABD
-#define C_BTN         0xFF252936
-#define C_BTN_HOVER   0xFF34394A
-#define C_BTN_PRESS   0xFF20232F
-#define C_ERROR       0xFFD9534F
-#define C_OK          0xFF5CB85C
-#define C_AMBER       0xFFD9A441
+#define C_BG          0xFF0B1020
+#define C_PANEL       0xFF121927
+#define C_PANEL_LINE  0xFF283349
+#define C_ACTIVE      0xFF5B8DEF
+#define C_ACTIVE_DK   0xFF3867C8
+#define C_INACTIVE    0xFF1A2232
+#define C_INACTIVE_DK 0xFF141B27
+#define C_WIN_BG      0xFF0E1523
+#define C_TEXT        0xFFF3F7FF
+#define C_TEXT_DIM    0xFF9AA8BD
+#define C_BTN         0xFF1A2333
+#define C_BTN_HOVER   0xFF263349
+#define C_BTN_PRESS   0xFF111826
+#define C_ERROR       0xFFE05B5B
+#define C_OK          0xFF4FD1B0
+#define C_AMBER       0xFFE4B363
 
 /* ------------------------------------------------------------------ */
 /* State                                                               */
@@ -88,6 +92,7 @@ struct gui_window {
     bool focused;
     bool minimized;
     bool maximized;
+    bool fullscreen;
     bool dragging;
     bool resizing;
     int  resize_flags;              /* bit0 right edge, bit1 bottom   */
@@ -112,24 +117,59 @@ static bool gui_mouse_prev_left = false;
 static bool gui_mouse_prev_right = false;
 static int active_window = -1;
 static int drag_window = -1;
+static uint32_t last_title_click_tick = 0;
+static int last_title_click_window = -1;
 static bool redraw_pending = true;
+
+static bool gui_fullscreen_active(void) {
+    for (int i = 0; i < MAX_WINDOWS; i++)
+        if (windows[i].visible && !windows[i].minimized && windows[i].fullscreen)
+            return true;
+    return false;
+}
 
 static bool start_menu_open = false;
 static int  menu_hover = -1;
+static int  menu_keyboard_index = -1;
 static int  hover_logo = 0;
 static int  hover_task = -1;
 static int  hover_pin = -1;
 
+/* Pinned launchers are slots 0..PIN_COUNT-1. Editions can remove some of
+ * them, so keep the visible order compact instead of drawing dead icons. */
+static int  visible_pins[PIN_COUNT];
+static int  visible_pin_count;
+
 static bool logout_requested = false;
 
-static int gui_theme = GUI_THEME_AURORA;
+static int gui_theme = GUI_THEME_SOLIS_UI_ENGINE;
 static uint32_t bg_color = C_BG;
+static bool guest_session = false;
+
+static bool gui_app_allowed(int slot) {
+    if (slot < 0 || slot >= SPX_MAX_APPS) return false;
+    if (!spx_get_exports(slot)) return false;
+    int edition = setup_edition();
+    if (slot == SPX_DOOM) return edition == SETUP_EDITION_EXTRA;
+    if (edition == SETUP_EDITION_MINIMAL)
+        return slot == SPX_TERMINAL || slot == SPX_NOTEPAD ||
+               slot == SPX_SETTINGS || slot == SPX_FILEBROWSER ||
+               slot == SPX_TASKMANAGER;
+    return true;
+}
+
+static const char *edition_badge(void) {
+    if (setup_edition() == SETUP_EDITION_MINIMAL) return "MIN";
+    if (setup_edition() == SETUP_EDITION_STANDARD) return "STD";
+    return "EXTRA";
+}
 
 /* The procedural desktop backdrops are expensive, so they (plus the desktop
  * icons) are rendered once into a cache and blitted on every redraw. */
 #define BG_CACHE_MAX_W 1280
 #define BG_CACHE_MAX_H 960
-static uint32_t bg_cache[BG_CACHE_MAX_W * BG_CACHE_MAX_H];
+static uint32_t bg_cache[BG_CACHE_MAX_W * BG_CACHE_MAX_H]
+    __attribute__((section(".gui_cache")));
 static uint32_t bg_cache_w = 0;
 static uint32_t bg_cache_h = 0;
 static bool bg_cache_valid = false;
@@ -221,6 +261,7 @@ static void gui_damage_pad(int x, int y, int w, int h, int n) {
 
 /* Per-layer helpers, defined next to the painter that consumes the damage. */
 static void gui_damage_window(int idx);
+static void gui_restore_window(int idx);
 static void gui_damage_active_content(void);
 static void gui_damage_taskbar(void);
 static void gui_damage_tray(void);
@@ -244,7 +285,7 @@ static const struct {
     const char *name;
     int kind;
     uint32_t color;
-} app_icons[10] = {
+} app_icons[12] = {
     {"Terminal",      0, 0xFF5CB85C},
     {"Notes",         1, 0xFF4C7BD9},
     {"Paint",         2, 0xFFE0576B},
@@ -255,13 +296,16 @@ static const struct {
     {"Editor",        7, 0xFF35B79B},
     {"Tetris",        8, 0xFFE0863C},
     {"Blocks",        9, 0xFF9BCF9E},
+    {"Calculator",   10, 0xFF6C8CD5},
+    {"Doom",         11, 0xFFB23A2E},
 };
 
-static const struct { int x; int y; } desktop_icon_positions[7] = {
+#define DESKTOP_ICON_COUNT 8
+static const struct { int x; int y; } desktop_icon_positions[DESKTOP_ICON_COUNT] = {
     {28, 60}, {116, 60}, {204, 60}, {292, 60},
-    {28, 160}, {116, 160}, {204, 160},
+    {28, 160}, {116, 160}, {204, 160}, {292, 160},
 };
-static const int desktop_icon_slots[7] = {0, 1, 2, 3, 4, 7, 8};
+static const int desktop_icon_slots[DESKTOP_ICON_COUNT] = {0, 1, 2, 3, 4, 7, 8, 11};
 
 static void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
 
@@ -307,7 +351,7 @@ static void icon_circle(int x, int y, int size, int cx, int cy, int radius,
 }
 
 static void draw_app_glyph(int x, int y, int size, int slot) {
-    if (slot < 0 || slot >= 10) return;
+    if (slot < 0 || slot >= 12) return;
     uint32_t fg = 0xFFFFFFFF;
     uint32_t detail = 0xFFE9F0FA;
     graphics_fill_rounded_rect(x + 1, y + 2, size, size, size / 5,
@@ -405,6 +449,26 @@ static void draw_app_glyph(int x, int y, int size, int slot) {
             icon_line(x, y, size, 11, 7, 16, 10, 0xFFB8E58E);
             icon_line(x, y, size, 16, 10, 21, 7, 0xFFB8E58E);
             icon_line(x, y, size, 16, 10, 16, 16, 0xFFB8E58E);
+            break;
+        case 10:
+            icon_rect(x, y, size, 7, 6, 25, 27, fg);
+            graphics_fill_rect(x + icon_coord(10, size), y + icon_coord(9, size),
+                               icon_coord(12, size), icon_coord(5, size), 0xFFD7E6FF);
+            icon_line(x, y, size, 10, 18, 13, 18, fg);
+            icon_line(x, y, size, 16, 18, 19, 18, fg);
+            icon_line(x, y, size, 22, 18, 24, 18, fg);
+            icon_line(x, y, size, 10, 22, 13, 22, fg);
+            icon_line(x, y, size, 16, 22, 19, 22, fg);
+            icon_line(x, y, size, 22, 22, 24, 22, fg);
+            break;
+        case 11:
+            icon_rect(x, y, size, 8, 7, 24, 25, fg);
+            icon_line(x, y, size, 8, 12, 14, 9, fg);
+            icon_line(x, y, size, 8, 16, 14, 13, fg);
+            icon_line(x, y, size, 8, 20, 14, 17, fg);
+            icon_line(x, y, size, 18, 10, 24, 10, fg);
+            icon_line(x, y, size, 18, 15, 24, 15, fg);
+            icon_line(x, y, size, 18, 20, 24, 20, fg);
             break;
         default:
             break;
@@ -518,7 +582,7 @@ static void glyph_close(int x, int y, uint32_t c) {
 static void gui_draw_ctrl_btn(int x, int y, uint32_t color,
                               void (*glyph)(int, int, uint32_t)) {
     graphics_fill_circle(x + BTN_W / 2, y + TITLEBAR_H / 2, 7, color);
-    glyph(x, y, 0xFF252A34);
+    glyph(x, y, 0xFF08101C);
 }
 
 static uint32_t blend_pixel(uint32_t base, uint32_t over, int alpha) {
@@ -563,47 +627,56 @@ static void gui_draw_window_shadow(int x, int y, int w, int h) {
 
 static void gui_draw_window(struct gui_window *w) {
     if (!w->visible || w->minimized) return;
+    if (w->fullscreen) return;
     int x = w->bounds.x, y = w->bounds.y;
     int ww = w->bounds.width, hh = w->bounds.height;
 
-    uint32_t bar    = w->focused ? C_ACTIVE : C_INACTIVE;
-    uint32_t bar_top = w->focused ? 0xFF8C80FF : 0xFF373B4D;
-    uint32_t border = w->focused ? C_ACTIVE_DK : C_INACTIVE_DK;
-    uint32_t tcol   = w->focused ? 0xFFFFFFFF : 0xFFB4B8BF;
+    uint32_t bar    = w->focused ? 0xFF182235 : 0xFF131A26;
+    uint32_t border = w->focused ? C_ACTIVE : C_PANEL_LINE;
+    uint32_t tcol   = w->focused ? C_TEXT : C_TEXT_DIM;
 
     /* soft shadow under the window */
     gui_draw_window_shadow(x, y, ww, hh);
 
-    /* Rounded outer shell keeps the window visually distinct from the desktop. */
-    graphics_fill_rounded_rect(x, y, ww, hh, 10, C_WIN_BG);
-    /* titlebar: subtle vertical gradient for a little depth */
-    graphics_fill_gradient_v(x + 1, y + 1, ww - 2, TITLEBAR_H - 1, bar_top, bar);
-    graphics_fill_rect(x + 10, y + 1, ww - 20, 1, 0xFFAAA1FF);
-    /* 1px border all around */
-    graphics_draw_rect(x, y, ww, hh, border);
+    /* Rounded shell and a calm flat titlebar feel more like a modern OS. */
+    graphics_fill_rounded_rect(x, y, ww, hh, 12, C_WIN_BG);
+    graphics_fill_rounded_rect(x, y, ww, TITLEBAR_H, 12, bar);
+    graphics_fill_rect(x, y + TITLEBAR_H - 12, ww, 12, bar);
+    graphics_fill_rect(x + 12, y + 1, ww - 24, 1,
+                       w->focused ? 0xFF36527A : 0xFF202B3C);
+    graphics_fill_rect(x + 1, y + TITLEBAR_H - 1, ww - 2, 1, 0xFF080D16);
+    graphics_draw_rounded_rect(x, y, ww, hh, 12, border);
 
     /* left-aligned title */
-    graphics_draw_string(x + 8, y + (TITLEBAR_H - 16) / 2, w->title, tcol);
+    graphics_draw_string(x + 14, y + (TITLEBAR_H - 16) / 2, w->title, tcol);
 
     /* control buttons: [min] [max] [close] at top-right */
-    int bx = x + ww - 3 * BTN_W - 1;
+    int bx = x + ww - 3 * BTN_W - 8;
     int by = y;
-    gui_draw_ctrl_btn(bx, by, 0xFFFFBD2E, glyph_min);
-    gui_draw_ctrl_btn(bx + BTN_W, by, 0xFF28C840,
+    gui_draw_ctrl_btn(bx, by, 0xFFE4B363, glyph_min);
+    gui_draw_ctrl_btn(bx + BTN_W, by, 0xFF54C7B5,
                       w->maximized ? glyph_restore : glyph_max);
-    gui_draw_ctrl_btn(bx + 2 * BTN_W, by, 0xFFFF5F57, glyph_close);
+    gui_draw_ctrl_btn(bx + 2 * BTN_W, by, 0xFFE05B5B, glyph_close);
 }
 
 static void gui_draw_window_content(struct gui_window *w) {
     if (!w->visible || w->minimized) return;
-    int x = w->bounds.x, y = w->bounds.y;
-    int ww = w->bounds.width, hh = w->bounds.height;
-    int cx = x + WIN_BORDER;
-    int cy = y + TITLEBAR_H;
-    int cw = ww - 2 * WIN_BORDER;
-    int ch = hh - TITLEBAR_H - WIN_BORDER;
-    if (cw <= 0 || ch <= 0) return;
-    graphics_fill_rect(cx, cy, cw, ch, C_WIN_BG);
+    int cx, cy, cw, ch;
+    if (w->fullscreen) {
+        cx = 0;
+        cy = 0;
+        cw = (int)graphics_get_width();
+        ch = (int)graphics_get_height();
+    } else {
+        int x = w->bounds.x, y = w->bounds.y;
+        int ww = w->bounds.width, hh = w->bounds.height;
+        cx = x + WIN_BORDER;
+        cy = y + TITLEBAR_H;
+        cw = ww - 2 * WIN_BORDER;
+        ch = hh - TITLEBAR_H - WIN_BORDER;
+        if (cw <= 0 || ch <= 0) return;
+        graphics_fill_rect(cx, cy, cw, ch, C_WIN_BG);
+    }
     /* The app only gets the client rect. Anything it draws outside this
      * region is discarded, which is what keeps long labels and lists from
      * spilling over the window frame. */
@@ -680,7 +753,8 @@ static void draw_bored_bg(void) {
     if (scale < 72) scale = 72;
     draw_solis_mark(w / 2 + 5, h / 2 + 6, scale, 0xFF101744);
     draw_solis_mark(w / 2, h / 2, scale, 0xFFFFFFFF);
-    graphics_draw_string(w / 2 - 32, h / 2 + scale / 2 + 12, "SOLIS OS", 0xFFFFFFFF);
+    graphics_draw_string(w / 2 - 64, h / 2 + scale / 2 + 12,
+                         SOLIS_RELEASE_LINE, 0xFFFFFFFF);
 }
 
 static void draw_aurora_bg(void) {
@@ -925,10 +999,10 @@ static void draw_voxel_system_tile(void) {
     graphics_fill_rect(x + 10, y + 9, 7, 7, 0xFFE4B779);
     graphics_fill_rect(x + 21, y + 9, 7, 7, 0xFF91C9A4);
     graphics_fill_rect(x + 32, y + 9, 7, 7, 0xFFE3818D);
-    graphics_draw_string(x + 48, y + 6, "SOLIS  /  SYSTEM TILE", 0xFFF2EDF5);
+    graphics_draw_string(x + 48, y + 6, "SOLIS  /  DAYBREAK TILE", 0xFFF2EDF5);
 
     draw_voxel_badge(x + 16, y + 43, 7);
-    graphics_draw_string(x + 96, y + 44, "SOLIS OS", 0xFFFFFFFF);
+    graphics_draw_string(x + 96, y + 44, SOLIS_RELEASE_LINE, 0xFFFFFFFF);
     graphics_draw_string(x + 96, y + 68, "DESKTOP READY", 0xFFD2C9E2);
     graphics_draw_string(x + 96, y + 90, "SECTOR 09  /  64-BIT", 0xFFB4AFCD);
     graphics_fill_rect(x + 96, y + ch - 25, cw - 112, 8, 0xFF49516F);
@@ -987,8 +1061,10 @@ static void draw_voxel_bg(void) {
 }
 
 static void draw_desktop_icons(void) {
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < DESKTOP_ICON_COUNT; i++) {
         int slot = desktop_icon_slots[i];
+        if (slot == SPX_DOOM && !gui_app_allowed(slot)) slot = SPX_CALCULATOR;
+        if (!gui_app_allowed(slot)) continue;
         int x = desktop_icon_positions[i].x;
         int y = desktop_icon_positions[i].y;
         draw_app_glyph(x, y, 56, slot);
@@ -1021,6 +1097,8 @@ static void gui_draw_desktop(void) {
         draw_bored_bg();
     } else if (gui_theme == GUI_THEME_AURORA) {
         draw_aurora_bg();
+    } else if (gui_theme == GUI_THEME_SOLIS_UI_ENGINE) {
+        solis_ui_engine_draw_wallpaper();
     } else {
         graphics_fill_rect(0, 0, graphics_get_width(), graphics_get_height(), bg_color);
     }
@@ -1126,7 +1204,7 @@ struct tb_layout {
 };
 
 static int tray_width(void) {
-    return 168;
+    return 120;
 }
 
 static void draw_text_right(int x, int y, const char *s, uint32_t c) {
@@ -1173,12 +1251,17 @@ static void taskbar_compute(struct tb_layout *L) {
     if (L->free_w < 0) L->free_w = 0;
 
     int need = task_n > 0 ? task_n * MIN_TASK_W + (task_n - 1) * TASK_GAP : 0;
-    int pins = PIN_COUNT;
+    visible_pin_count = 0;
+    for (int i = 0; i < PIN_COUNT; i++) {
+        if (gui_app_allowed(i))
+            visible_pins[visible_pin_count++] = i;
+    }
+    int pins = visible_pin_count;
     if (task_n > 0) {
         int spare = L->free_w - need - 12;
         pins = spare > 0 ? spare / (PIN_W + PIN_GAP) : 0;
     }
-    if (pins > PIN_COUNT) pins = PIN_COUNT;
+    if (pins > visible_pin_count) pins = visible_pin_count;
     if (pins < 0) pins = 0;
 
     int pins_w = pins > 0 ? pins * (PIN_W + PIN_GAP) - PIN_GAP : 0;
@@ -1211,7 +1294,7 @@ static int pin_at(int mx, int my) {
         return -1;
     for (int i = 0; i < L.pin_n; i++) {
         int x = L.pin_x + i * (PIN_W + PIN_GAP);
-        if (mx >= x - 1 && mx < x + PIN_W) return i;
+        if (mx >= x - 1 && mx < x + PIN_W) return visible_pins[i];
     }
     return -1;
 }
@@ -1231,32 +1314,17 @@ static int task_at(int mx, int my) {
 }
 
 static void gui_draw_tray(int tx, int ty, int tw, int th) {
-    int y = ty + (th - 16) / 2;
-    int right = tx + tw;
     char timebuf[8];
-    gui_format_time(timebuf, 8);
-    draw_text_right(right, y, timebuf, C_TEXT);
-    right -= 46;
-
     char datebuf[12];
+    gui_format_time(timebuf, 8);
     gui_format_date(datebuf, 12);
-    draw_text_right(right, y, datebuf, C_TEXT_DIM);
-    right -= 42;
-    graphics_fill_rect(right, ty + 8, 1, th - 16, C_PANEL_LINE);
-    right -= 12;
-
-    char rambuf[12];
-    uint32_t mb = sys_get_total_ram();
-    rambuf[0] = 'R'; rambuf[1] = 'A'; rambuf[2] = 'M'; rambuf[3] = ' ';
-    char tmp[8];
-    int ti = 0;
-    if (mb == 0) tmp[ti++] = '0';
-    while (mb > 0) { tmp[ti++] = '0' + (mb % 10); mb /= 10; }
-    int bi = 4;
-    while (ti > 0) rambuf[bi++] = tmp[--ti];
-    rambuf[bi++] = 'M';
-    rambuf[bi++] = '\0';
-    draw_text_right(right, y, rambuf, C_TEXT_DIM);
+    if (guest_session) {
+        datebuf[0] = 'G'; datebuf[1] = 'U'; datebuf[2] = 'E';
+        datebuf[3] = 'S'; datebuf[4] = 'T'; datebuf[5] = '\0';
+    }
+    int right = tx + tw;
+    draw_text_right(right, ty + th / 2 - 17, datebuf, C_TEXT_DIM);
+    draw_text_right(right, ty + th / 2 + 2, timebuf, C_TEXT);
 }
 
 static void gui_draw_taskbar_shadow(const struct tb_layout *L) {
@@ -1311,7 +1379,7 @@ static void gui_draw_task_button(const struct tb_layout *L, int idx, int x) {
     graphics_draw_rounded_rect(x, y, width, height, ITEM_RADIUS, border);
 
     int slot = w->app_id - 1;
-    if (slot >= 0 && slot < 10)
+    if (slot >= 0 && slot < 12)
         draw_app_icon(x + 6, y + (height - 14) / 2, 14, slot);
 
     uint32_t text_color = w->minimized ? C_TEXT_DIM : C_TEXT;
@@ -1330,6 +1398,7 @@ static void gui_draw_task_button(const struct tb_layout *L, int idx, int x) {
 }
 
 static void gui_draw_panel(void) {
+    if (gui_fullscreen_active()) return;
     struct tb_layout L;
     gui_build_task_list();
     taskbar_compute(&L);
@@ -1338,15 +1407,15 @@ static void gui_draw_panel(void) {
     graphics_fill_rounded_rect(L.card_x, L.card_y, L.card_w, L.card_h,
                                TASKBAR_RADIUS, C_PANEL);
     graphics_fill_rect(L.card_x + TASKBAR_RADIUS, L.card_y + 1,
-                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF5B5875);
+                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF34445C);
     graphics_fill_rect(L.card_x + TASKBAR_RADIUS, L.card_y + 2,
-                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF282B3A);
+                       L.card_w - TASKBAR_RADIUS * 2, 1, 0xFF0D1420);
     graphics_draw_rounded_rect(L.card_x, L.card_y, L.card_w, L.card_h,
                                TASKBAR_RADIUS, C_PANEL_LINE);
 
     gui_draw_launcher(&L);
     for (int i = 0; i < L.pin_n; i++)
-        gui_draw_pin(&L, i, L.pin_x + i * (PIN_W + PIN_GAP));
+        gui_draw_pin(&L, visible_pins[i], L.pin_x + i * (PIN_W + PIN_GAP));
     if (L.pin_n > 0 && task_n > 0) {
         int sep_x = L.pin_x + L.pin_n * (PIN_W + PIN_GAP) - PIN_GAP + 5;
         graphics_fill_rect(sep_x, L.card_y + 10, 1, L.card_h - 20, C_PANEL_LINE);
@@ -1372,11 +1441,14 @@ static const struct menu_item menu_items[] = {
     {0, 2, "Paint"},
     {0, 4, "Files"},
     {0, 7, "Editor"},
+    {0, 10, "Calculator"},
     {2, 0, "Utilities"},
     {0, 5, "Task Manager"},
     {0, 6, "Package Manager"},
+    {2, 0, "Games"},
     {0, 8, "Tetris"},
     {0, 9, "Solis Blocks"},
+    {0, 11, "Doom"},
     {2, 0, "Settings"},
     {0, 3, "Settings"},
     {2, 0, "Session"},
@@ -1386,10 +1458,24 @@ static const struct menu_item menu_items[] = {
 };
 #define MENU_NUM ((int)(sizeof(menu_items) / sizeof(menu_items[0])))
 
+static bool menu_item_allowed(int i) {
+    if (i < 0 || i >= MENU_NUM) return false;
+    const struct menu_item *mi = &menu_items[i];
+    if (mi->kind == 0) return gui_app_allowed(mi->arg);
+    if (mi->kind == 2) {
+        for (int j = i + 1; j < MENU_NUM && menu_items[j].kind != 2; j++)
+            if (menu_item_allowed(j)) return true;
+        return false;
+    }
+    return true;
+}
+
 static int menu_height(void) {
     int h = MENU_HEADER_H;
-    for (int i = 0; i < MENU_NUM; i++)
+    for (int i = 0; i < MENU_NUM; i++) {
+        if (!menu_item_allowed(i)) continue;
         h += (menu_items[i].kind == 2) ? MENU_SEC_H : MENU_ITEM_H;
+    }
     return h;
 }
 
@@ -1409,11 +1495,25 @@ static int menu_item_at(int mx, int my) {
     if (mx < x || mx >= x + w || my < y || my >= y + h) return -1;
     int iy = y + MENU_HEADER_H;
     for (int i = 0; i < MENU_NUM; i++) {
+        if (!menu_item_allowed(i)) continue;
         if (menu_items[i].kind == 2) { iy += MENU_SEC_H; continue; }
         if (my >= iy && my < iy + MENU_ITEM_H) return i;
         iy += MENU_ITEM_H;
     }
     return -1;
+}
+
+static void menu_keyboard_step(int direction) {
+    int start = menu_keyboard_index;
+    for (int n = 0; n < MENU_NUM; n++) {
+        int i = (start + direction + MENU_NUM * 2) % MENU_NUM;
+        start = i;
+        if (menu_items[i].kind != 2 && menu_item_allowed(i)) {
+            menu_keyboard_index = i;
+            gui_damage_menu();
+            return;
+        }
+    }
 }
 
 static void session_glyph(int kind, int x, int y, uint32_t c) {
@@ -1442,8 +1542,20 @@ static void gui_draw_start_menu(void) {
 
     /* brand header */
     graphics_fill_gradient_v(x + 1, y + 1, w - 2, MENU_HEADER_H,
-                             0xFF8C80FF, C_ACTIVE_DK);
-    graphics_draw_string(x + 8, y + (MENU_HEADER_H - 16) / 2, "Solis OS", 0xFFFFFFFF);
+                             0xFF1B2942, 0xFF111A2B);
+    graphics_draw_string(x + 8, y + (MENU_HEADER_H - 16) / 2,
+                         SOLIS_NAME " " SOLIS_VERSION, 0xFFFFFFFF);
+    if (guest_session)
+        graphics_draw_string(x + w - 48, y + (MENU_HEADER_H - 16) / 2,
+                             "GUEST", 0xFFE4B363);
+    else {
+        const char *badge = edition_badge();
+        int len = 0;
+        while (badge[len]) len++;
+        graphics_draw_string(x + w - 8 - len * 8,
+                             y + (MENU_HEADER_H - 16) / 2,
+                             badge, 0xFF8FB4E8);
+    }
 
     /* body */
     graphics_fill_rect(x, y + MENU_HEADER_H, w, h - MENU_HEADER_H, C_PANEL);
@@ -1451,6 +1563,7 @@ static void gui_draw_start_menu(void) {
 
     int iy = y + MENU_HEADER_H;
     for (int i = 0; i < MENU_NUM; i++) {
+        if (!menu_item_allowed(i)) continue;
         const struct menu_item *mi = &menu_items[i];
         if (mi->kind == 2) {
             graphics_draw_string(x + 10, iy + 2, mi->label, C_TEXT_DIM);
@@ -1458,9 +1571,11 @@ static void gui_draw_start_menu(void) {
             iy += MENU_SEC_H;
             continue;
         }
-        bool hov = (i == menu_hover);
+        bool hov = (i == menu_hover) ||
+                   (menu_hover < 0 && i == menu_keyboard_index);
         if (hov) {
-            graphics_fill_rect(x + 1, iy, w - 2, MENU_ITEM_H, C_ACTIVE);
+            graphics_fill_rect(x + 1, iy, w - 2, MENU_ITEM_H, C_BTN_HOVER);
+            graphics_fill_rect(x + 1, iy, 2, MENU_ITEM_H, C_ACTIVE);
         }
         if (mi->kind == 0) {
             int slot = mi->arg;
@@ -1470,8 +1585,6 @@ static void gui_draw_start_menu(void) {
         }
         graphics_draw_string(x + 30, iy + (MENU_ITEM_H - 16) / 2, mi->label,
                              hov ? 0xFFFFFFFF : C_TEXT);
-        if (hov)
-            graphics_draw_rect(x + 1, iy, w - 2, MENU_ITEM_H, C_ACTIVE_DK);
         iy += MENU_ITEM_H;
     }
 }
@@ -1497,6 +1610,20 @@ static void menu_activate(int item) {
 /* ------------------------------------------------------------------ */
 /* Window management API                                               */
 /* ------------------------------------------------------------------ */
+/* A pinned launcher should focus the running app instead of stacking an
+ * identical window on every click. */
+static int gui_reuse_app_window(int slot) {
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (windows[i].visible && windows[i].app_id == slot + 1) {
+            if (windows[i].minimized) gui_restore_window(i);
+            else gui_focus_window(i);
+            gui_damage_taskbar();
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int gui_alloc_window(const char *title, int app_id) {
     for (int i = 0; i < MAX_WINDOWS; ++i) {
         if (!windows[i].visible) {
@@ -1505,13 +1632,39 @@ static int gui_alloc_window(const char *title, int app_id) {
             w->focused = true;
             w->minimized = false;
             w->maximized = false;
+            w->fullscreen = false;
             w->dragging = false;
             w->resizing = false;
             w->resize_flags = 0;
-            w->bounds.x = 60 + (app_id * 30);
-            w->bounds.y = 40 + (app_id * 24);
-            w->bounds.width = 500;
-            w->bounds.height = 360;
+            int win_width = 500;
+            int win_height = 360;
+            const struct app_exports *size_app = spx_get_exports(app_id - 1);
+            if (size_app && size_app->get_size) {
+                int requested_w = 0;
+                int requested_h = 0;
+                size_app->get_size(&requested_w, &requested_h);
+                if (requested_w > 0) win_width = requested_w;
+                if (requested_h > 0) win_height = requested_h;
+            }
+            if (win_width < MIN_WIN_W) win_width = MIN_WIN_W;
+            if (win_height < MIN_WIN_H) win_height = MIN_WIN_H;
+            int screen_w = (int)graphics_get_width();
+            int screen_h = (int)graphics_get_height();
+            int max_w = screen_w - 20;
+            int max_h = screen_h - PANEL_H - 20;
+            if (max_w < MIN_WIN_W) max_w = MIN_WIN_W;
+            if (max_h < MIN_WIN_H) max_h = MIN_WIN_H;
+            if (win_width > max_w) win_width = max_w;
+            if (win_height > max_h) win_height = max_h;
+            if (size_app && size_app->get_size) {
+                w->bounds.x = (screen_w - win_width) / 2;
+                w->bounds.y = (screen_h - PANEL_H - win_height) / 2;
+            } else {
+                w->bounds.x = 60 + (app_id * 30);
+                w->bounds.y = 40 + (app_id * 24);
+            }
+            w->bounds.width = win_width;
+            w->bounds.height = win_height;
             w->restore = w->bounds;
             w->app_id = app_id;
             int j = 0;
@@ -1538,9 +1691,62 @@ int gui_launch_taskmanager(void)   { return gui_alloc_window("Task Manager", 6);
 int gui_launch_pkg(void)           { return gui_alloc_window("SOLPKG", 7); }
 int gui_launch_editor(void)        { return gui_alloc_window("Editor", 8); }
 int gui_launch_tetris(void)        { return gui_alloc_window("Tetris", 9); }
-int gui_launch_blocks(void)        { return gui_alloc_window("Solis Blocks", 10); }
+static void gui_enter_fullscreen(int idx) {
+    if (idx < 0 || idx >= MAX_WINDOWS) return;
+    struct gui_window *w = &windows[idx];
+    if (!w->visible || w->fullscreen) return;
+    w->restore = w->bounds;
+    w->fullscreen = true;
+    w->maximized = false;
+    w->bounds.x = 0;
+    w->bounds.y = 0;
+    w->bounds.width = (int)graphics_get_width();
+    w->bounds.height = (int)graphics_get_height();
+    start_menu_open = false;
+    gui_damage_all();
+}
+
+static void gui_exit_fullscreen(int idx) {
+    if (idx < 0 || idx >= MAX_WINDOWS) return;
+    struct gui_window *w = &windows[idx];
+    if (!w->fullscreen) return;
+    w->fullscreen = false;
+    w->bounds = w->restore;
+    if (w->bounds.width < MIN_WIN_W) w->bounds.width = MIN_WIN_W;
+    if (w->bounds.height < MIN_WIN_H) w->bounds.height = MIN_WIN_H;
+    int sw = (int)graphics_get_width();
+    int sh = (int)graphics_get_height();
+    if (w->bounds.x < 0) w->bounds.x = 0;
+    if (w->bounds.y < 0) w->bounds.y = 0;
+    if (w->bounds.x + w->bounds.width > sw)
+        w->bounds.x = sw - w->bounds.width;
+    if (w->bounds.y + w->bounds.height > sh - PANEL_H)
+        w->bounds.y = sh - PANEL_H - w->bounds.height;
+    gui_damage_all();
+}
+
+int gui_launch_blocks(void) {
+    int idx = gui_alloc_window("Solis Blocks", 10);
+    if (idx >= 0) gui_enter_fullscreen(idx);
+    return idx;
+}
+
+int gui_launch_calculator(void) {
+    return gui_alloc_window("Calculator", 11);
+}
+
+int gui_launch_doom(void) {
+    int idx = gui_alloc_window("Doom", SPX_DOOM + 1);
+    if (idx >= 0) gui_enter_fullscreen(idx);
+    return idx;
+}
 
 int gui_launch_app(int slot) {
+    if (!gui_app_allowed(slot)) return -1;
+    if (slot >= 0 && slot < SPX_MAX_APPS) {
+        int existing = gui_reuse_app_window(slot);
+        if (existing >= 0) return existing;
+    }
     switch (slot) {
         case 0: return gui_launch_terminal();
         case 1: return gui_launch_notes();
@@ -1552,6 +1758,8 @@ int gui_launch_app(int slot) {
         case 7: return gui_launch_editor();
         case 8: return gui_launch_tetris();
         case 9: return gui_launch_blocks();
+        case 10: return gui_launch_calculator();
+        case 11: return gui_launch_doom();
         default: return -1;
     }
 }
@@ -1636,6 +1844,7 @@ void gui_init(void) {
         w->focused = false;
         w->minimized = false;
         w->maximized = false;
+        w->fullscreen = false;
         w->dragging = false;
         w->resizing = false;
         w->resize_flags = 0;
@@ -1667,6 +1876,8 @@ void gui_set_bg_color(uint32_t color) { bg_color = color; gui_theme = GUI_THEME_
 uint32_t gui_get_bg_color(void) { return bg_color; }
 void gui_set_theme(int theme) { gui_theme = theme; bg_cache_invalidate(); gui_damage_all(); }
 int gui_get_theme(void) { return gui_theme; }
+void gui_set_guest_session(bool guest) { guest_session = guest; gui_damage_all(); }
+bool gui_is_guest_session(void) { return guest_session; }
 
 /* ------------------------------------------------------------------ */
 /* Save dialog (blocking modal)                                        */
@@ -2035,6 +2246,10 @@ static void gui_damage_window(int idx) {
 
 static void gui_damage_active_content(void) {
     if (active_window < 0 || active_window >= MAX_WINDOWS) return;
+    if (windows[active_window].fullscreen) {
+        gui_damage(0, 0, (int)graphics_get_width(), (int)graphics_get_height());
+        return;
+    }
     const struct gui_rect *r = &windows[active_window].bounds;
     /* Only the client area changes when an app handles input. */
     gui_damage(r->x + WIN_BORDER, r->y + TITLEBAR_H,
@@ -2118,7 +2333,7 @@ static void gui_paint_region(int rx, int ry, int rw, int rh) {
         if (rect_overlaps(rx, ry, rw, rh, 0, sh - PANEL_H, sw, PANEL_H))
             gui_draw_panel();
     }
-    if (start_menu_open) {
+    if (start_menu_open && !gui_fullscreen_active()) {
         int mx, my, mw, mh;
         menu_geom(&mx, &my, &mw, &mh);
         if (rect_overlaps(rx, ry, rw, rh, mx, my, mw, mh))
@@ -2131,10 +2346,13 @@ static void gui_paint_region(int rx, int ry, int rw, int rh) {
 }
 
 void gui_redraw(void) {
-    if (prev_cursor_x >= 0 &&
-        (prev_cursor_x != mouse_x || prev_cursor_y != mouse_y))
-        gui_damage_cursor(prev_cursor_x, prev_cursor_y);
-    gui_damage_cursor(mouse_x, mouse_y);
+    bool fullscreen = gui_fullscreen_active();
+    if (!fullscreen) {
+        if (prev_cursor_x >= 0 &&
+            (prev_cursor_x != mouse_x || prev_cursor_y != mouse_y))
+            gui_damage_cursor(prev_cursor_x, prev_cursor_y);
+        gui_damage_cursor(mouse_x, mouse_y);
+    }
     graphics_reset_pixel_counter();
 
     /* Without a usable desktop cache the first region painted has to render
@@ -2161,9 +2379,10 @@ void gui_redraw(void) {
 
     /* The cursor lives above every other layer, so it is drawn last and its
      * old pixels were already repaired by the damage pass above. */
-    graphics_draw_mouse_cursor(mouse_x, mouse_y, 0xFFFFFFFF);
-    prev_cursor_x = mouse_x;
-    prev_cursor_y = mouse_y;
+    if (!fullscreen)
+        graphics_draw_mouse_cursor(mouse_x, mouse_y, 0xFFFFFFFF);
+    prev_cursor_x = fullscreen ? -1 : mouse_x;
+    prev_cursor_y = fullscreen ? -1 : mouse_y;
     redraw_pending = false;
 
     /* Incremental rendering is only useful if the savings are real, so the
@@ -2201,6 +2420,7 @@ bool gui_needs_redraw(void) { return redraw_pending; }
 void gui_toggle_start_menu(void) {
     start_menu_open = !start_menu_open;
     menu_hover = -1;
+    menu_keyboard_index = start_menu_open ? 1 : -1;
     /* The menu anchors to the launcher button, so both halves repaint. */
     gui_damage_menu();
     gui_damage_taskbar();
@@ -2214,11 +2434,14 @@ static bool pt_in_rect(int px, int py, const struct gui_rect *r) {
 }
 
 static int desktop_icon_at(int x, int y) {
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < DESKTOP_ICON_COUNT; i++) {
+        int slot = desktop_icon_slots[i];
+        if (slot == SPX_DOOM && !gui_app_allowed(slot)) slot = SPX_CALCULATOR;
+        if (!gui_app_allowed(slot)) continue;
         int left = desktop_icon_positions[i].x - 8;
         int top = desktop_icon_positions[i].y - 8;
         if (x >= left && x < left + 72 && y >= top && y < top + 90)
-            return desktop_icon_slots[i];
+            return slot;
     }
     return -1;
 }
@@ -2333,9 +2556,25 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     /* release ends drag / resize */
     if (left_release && drag_window >= 0) {
         int idx = drag_window;
+        bool was_dragging = windows[idx].dragging;
         windows[idx].dragging = false;
         windows[idx].resizing = false;
         drag_window = -1;
+        if (was_dragging && !windows[idx].maximized && !windows[idx].fullscreen) {
+            int sw = (int)graphics_get_width();
+            int sh = (int)graphics_get_height();
+            if (mouse_y <= SNAP_DIST) {
+                gui_toggle_maximize(idx);
+            } else if (mouse_x <= SNAP_DIST || mouse_x >= sw - SNAP_DIST) {
+                struct gui_window *w = &windows[idx];
+                w->restore = w->bounds;
+                w->bounds.x = mouse_x <= SNAP_DIST ? 0 : sw / 2;
+                w->bounds.y = 0;
+                w->bounds.width = sw / 2;
+                w->bounds.height = sh - PANEL_H;
+                gui_damage_all();
+            }
+        }
         /* The drop may have snapped the window to a new position. */
         gui_damage_window(idx);
         mouse_buttons = buttons;
@@ -2372,6 +2611,15 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
         struct gui_rect r = w->bounds;
         if (!pt_in_rect(mouse_x, mouse_y, &r)) continue;
 
+        if (w->fullscreen) {
+            gui_focus_window(i);
+            const struct app_exports *app = spx_get_exports(w->app_id - 1);
+            if (app && app->handle_mouse)
+                app->handle_mouse(0, 0, sw, sh, mouse_x, mouse_y);
+            mouse_buttons = buttons;
+            return;
+        }
+
         int bx = r.x + r.width - 3 * BTN_W - 1;
 
         /* control buttons in titlebar */
@@ -2397,6 +2645,16 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
 
         if (mouse_y < r.y + TITLEBAR_H) {
             if (!w->maximized) {
+                uint32_t now = timer_get_ticks();
+                if (last_title_click_window == i &&
+                    (uint32_t)(now - last_title_click_tick) < 25) {
+                    gui_toggle_maximize(i);
+                    last_title_click_window = -1;
+                    mouse_buttons = buttons;
+                    return;
+                }
+                last_title_click_window = i;
+                last_title_click_tick = now;
                 w->dragging = true;
                 w->resizing = false;
                 drag_window = i;
@@ -2431,7 +2689,7 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
         return;
     }
 
-    if (mouse_y < py) {
+    if (!gui_fullscreen_active() && mouse_y < py) {
         int slot = desktop_icon_at(mouse_x, mouse_y);
         if (slot >= 0) {
             console_write("[GUI] desktop launch: ");
@@ -2445,7 +2703,7 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     }
 
     /* taskbar */
-    if (mouse_y >= py) {
+    if (!gui_fullscreen_active() && mouse_y >= py) {
         struct tb_layout L;
         taskbar_compute(&L);
         if (mouse_x >= L.launch_x && mouse_x < L.launch_x + L.launch_sz &&
@@ -2476,12 +2734,49 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
 }
 
 void gui_handle_key(char key) {
+    if (start_menu_open) {
+        if (key == '\t') {
+            menu_keyboard_step(1);
+            return;
+        }
+        if (key == '\n' || key == '\r') {
+            int item = menu_keyboard_index;
+            start_menu_open = false;
+            if (item >= 0) menu_activate(item);
+            gui_damage_menu();
+            gui_damage_taskbar();
+            return;
+        }
+    }
     if (key == 0x1b) {
         if (start_menu_open) {
             start_menu_open = false;
+            menu_keyboard_index = -1;
             gui_damage_menu();
             return;
         }
+    }
+    /* Ctrl+Q closes every window without tearing down the desktop session. */
+    if (key == 0x11) {
+        for (int i = 0; i < MAX_WINDOWS; i++)
+            if (windows[i].visible) gui_close_window(i);
+        return;
+    }
+    if (key == 0x1b && active_window >= 0 && active_window < MAX_WINDOWS &&
+        windows[active_window].fullscreen &&
+        windows[active_window].app_id != SPX_DOOM + 1) {
+        gui_exit_fullscreen(active_window);
+        return;
+    }
+    if (key == 0x1b && active_window >= 0 && active_window < MAX_WINDOWS &&
+        windows[active_window].app_id == SPX_TASKMANAGER + 1) {
+        gui_close_window(active_window);
+        return;
+    }
+    /* Ctrl+W closes the focused window, matching common desktop shortcuts. */
+    if (key == 0x17 && active_window >= 0 && active_window < MAX_WINDOWS) {
+        gui_close_window(active_window);
+        return;
     }
     if (key == '\t' && keyboard_is_alt_pressed()) {
         gui_cycle_focus();
@@ -2498,6 +2793,8 @@ void gui_handle_key(char key) {
 
 void gui_handle_scroll(int notches) {
     if (notches == 0) return;
+    int sw = (int)graphics_get_width();
+    int sh = (int)graphics_get_height();
 
     /* Wheel events go to the topmost window under the pointer, and to the app
      * only when the pointer is really over its client area. Menus and
@@ -2505,14 +2802,18 @@ void gui_handle_scroll(int notches) {
     for (int i = MAX_WINDOWS - 1; i >= 0; i--) {
         struct gui_window *w = &windows[i];
         if (!w->visible || w->minimized) continue;
-        struct gui_rect r = w->bounds;
-        if (mouse_x < r.x || mouse_x >= r.x + r.width ||
-            mouse_y < r.y || mouse_y >= r.y + r.height) continue;
-
-        int cx = r.x + WIN_BORDER;
-        int cy = r.y + TITLEBAR_H;
-        int cw = r.width - 2 * WIN_BORDER;
-        int ch = r.height - TITLEBAR_H - WIN_BORDER;
+        int cx, cy, cw, ch;
+        if (w->fullscreen) {
+            cx = 0; cy = 0; cw = sw; ch = sh;
+        } else {
+            struct gui_rect r = w->bounds;
+            if (mouse_x < r.x || mouse_x >= r.x + r.width ||
+                mouse_y < r.y || mouse_y >= r.y + r.height) continue;
+            cx = r.x + WIN_BORDER;
+            cy = r.y + TITLEBAR_H;
+            cw = r.width - 2 * WIN_BORDER;
+            ch = r.height - TITLEBAR_H - WIN_BORDER;
+        }
         if (mouse_x < cx || mouse_x >= cx + cw ||
             mouse_y < cy || mouse_y >= cy + ch) continue;
 
@@ -2527,6 +2828,37 @@ void gui_handle_scroll(int notches) {
 
 void gui_update_clock(void) {
     gui_damage_tray();
+}
+
+/* Apps that animate get a fixed-rate tick separate from drawing. Ticking at
+ * 20 Hz makes motion independent of mouse movement; it also keeps draw()
+ * read-only, so clipping a repaint to the cursor rectangle cannot leave a
+ * trail of stale frames. */
+void gui_tick(void) {
+    static uint32_t last_tick = 0;
+    uint32_t now = timer_get_ticks();
+    if ((uint32_t)(now - last_tick) < 5) return;
+    last_tick = now;
+
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        struct gui_window *w = &windows[i];
+        if (!w->visible || w->minimized) continue;
+        const struct app_exports *app = spx_get_exports(w->app_id - 1);
+        if (!app || !app->tick) continue;
+        if (!app->tick()) continue;
+        int cx, cy, cw, ch;
+        if (w->fullscreen) {
+            cx = 0; cy = 0;
+            cw = (int)graphics_get_width();
+            ch = (int)graphics_get_height();
+        } else {
+            cx = w->bounds.x + WIN_BORDER;
+            cy = w->bounds.y + TITLEBAR_H;
+            cw = w->bounds.width - 2 * WIN_BORDER;
+            ch = w->bounds.height - TITLEBAR_H - WIN_BORDER;
+        }
+        if (cw > 0 && ch > 0) gui_damage(cx, cy, cw, ch);
+    }
 }
 
 bool gui_take_logout(void) {

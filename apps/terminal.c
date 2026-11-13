@@ -1,8 +1,12 @@
 #include <solis/apps/terminal.h>
-#include <solis/apps/cinterp.h>
+#include <solis/apps/ccompiler.h>
+#include <solis/apps/lua.h>
+#include <solis/jit.h>
 #include <solis/dbg.h>
 #include <solis/graphics.h>
 #include <solis/vfs.h>
+#include <solis/solfs.h>
+#include <solis/setup.h>
 #include <solis/timer.h>
 #include <solis/ports.h>
 #include <solis/spx.h>
@@ -26,6 +30,7 @@ extern void dbg_get_health(struct dbg_health *out);
 #define TERM_COL_OK     0xFF5CB85C
 #define TERM_COL_MUTED  0xFF888888
 #define TERM_SOURCE_MAX 16384
+#define TERM_SCX_MAX (sizeof(struct scx_header) + SOLIS_JIT_MAX_CODE + SOLIS_JIT_MAX_DATA)
 
 #define TERM_ATTR_NORMAL 0
 #define TERM_ATTR_PROMPT 1
@@ -41,6 +46,23 @@ static int term_col = 0;
 static char line_buf[LINE_BUF];
 static int line_pos = 0;
 static char source_buffer[TERM_SOURCE_MAX + 1];
+static char command_history[8][LINE_BUF];
+static int command_history_count = 0;
+static int command_history_head = 0;
+
+static bool passwd_input = false;
+static int passwd_stage = 0;
+static int passwd_len = 0;
+static char passwd_first[SETUP_PASSWORD_MAX];
+static char passwd_second[SETUP_PASSWORD_MAX];
+
+static void passwd_reset(void) {
+    passwd_input = false;
+    passwd_stage = 0;
+    passwd_len = 0;
+    passwd_first[0] = '\0';
+    passwd_second[0] = '\0';
+}
 
 static int str_eq(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
@@ -65,6 +87,8 @@ static void term_scroll(void) {
     if (term_row > 0) term_row--;
 }
 
+void cc_output_char(char c);
+
 static void term_putchar(char c) {
     if (c == '\n') {
         term_col = 0;
@@ -77,6 +101,23 @@ static void term_putchar(char c) {
             term_col--;
             term_buffer[term_row * TERM_COLS + term_col] = ' ';
             term_attr[term_row * TERM_COLS + term_col] = TERM_ATTR_NORMAL;
+        }
+        return;
+    }
+    if (c == '\t') {
+        int next = (term_col + 8) & ~7;
+        while (term_col < next) {
+            if (term_col >= TERM_COLS) {
+                term_col = 0;
+                term_row++;
+                if (term_row >= TERM_ROWS) term_scroll();
+            }
+            int tab_idx = term_row * TERM_COLS + term_col;
+            if (tab_idx < TERM_BUF) {
+                term_buffer[tab_idx] = ' ';
+                term_attr[tab_idx] = TERM_ATTR_NORMAL;
+            }
+            term_col++;
         }
         return;
     }
@@ -117,11 +158,46 @@ static void term_clear(void) {
 static void int_to_str(int n, char *buf) {
     char tmp[12];
     int ti = 0;
-    if (n == 0) { tmp[ti++] = '0'; }
-    while (n > 0) { tmp[ti++] = '0' + (n % 10); n /= 10; }
+    unsigned int value;
+    if (n < 0) {
+        *buf++ = '-';
+        value = (unsigned int)(-(n + 1)) + 1u;
+    } else {
+        value = (unsigned int)n;
+    }
+    if (value == 0) { tmp[ti++] = '0'; }
+    while (value > 0) { tmp[ti++] = '0' + (value % 10); value /= 10; }
     int bi = 0;
     while (ti > 0) buf[bi++] = tmp[--ti];
     buf[bi] = '\0';
+}
+
+static void history_add(const char *command) {
+    if (!command || !command[0]) return;
+    int i = 0;
+    while (command[i] && i < LINE_BUF - 1) {
+        command_history[command_history_head][i] = command[i];
+        i++;
+    }
+    command_history[command_history_head][i] = '\0';
+    command_history_head = (command_history_head + 1) % 8;
+    if (command_history_count < 8) command_history_count++;
+}
+
+static void history_print(void) {
+    if (command_history_count == 0) {
+        term_println("No commands yet.");
+        return;
+    }
+    for (int n = 0; n < command_history_count; n++) {
+        int slot = (command_history_head + 8 - command_history_count + n) % 8;
+        char num[8];
+        int_to_str(n + 1, num);
+        term_print("  ");
+        term_print(num);
+        term_print("  ");
+        term_println(command_history[slot]);
+    }
 }
 
 static void shell_prompt(void) {
@@ -162,28 +238,128 @@ static int read_source_file(const char *path) {
     return 0;
 }
 
-static void shell_compile_c(const char *path) {
-    if (read_source_file(path) < 0) return;
-    if (ci_check(source_buffer) < 0) {
+void cc_output_char(char c) {
+    term_putchar(c);
+}
+
+static int write_file_bytes(const char *path, const uint8_t *data, uint32_t size) {
+    vfs_delete(path);
+    int fd = vfs_create(path);
+    if (fd < 0) return -1;
+    uint32_t offset = 0;
+    while (offset < size) {
+        uint32_t chunk = size - offset;
+        if (chunk > 2048) chunk = 2048;
+        int written = vfs_write(fd, data + offset, chunk);
+        if (written <= 0) return -1;
+        offset += (uint32_t)written;
+    }
+    return 0;
+}
+
+static int read_file_bytes(const char *path, uint8_t *buffer, uint32_t capacity) {
+    int fd = vfs_open(path);
+    if (fd < 0) return -1;
+    int size = vfs_get_size(fd);
+    if (size <= 0 || (uint32_t)size > capacity) return -1;
+    int read = vfs_read(fd, buffer, (uint32_t)size);
+    if (read != size) return -1;
+    return read;
+}
+
+static void make_scx_path(const char *source, char *output, int capacity) {
+    int length = str_len(source);
+    int out = 0;
+    if (length > 2 && source[length - 2] == '.' && source[length - 1] == 'c') {
+        while (out < length - 2 && out < capacity - 5) output[out] = source[out], out++;
+    } else {
+        while (out < length && out < capacity - 6) output[out] = source[out], out++;
+    }
+    output[out++] = '.';
+    output[out++] = 's';
+    output[out++] = 'c';
+    output[out++] = 'x';
+    output[out] = '\0';
+}
+
+static uint8_t cc_image[TERM_SCX_MAX];
+static uint8_t scx_image[TERM_SCX_MAX];
+
+static int compile_c_to_image(const char *path, uint8_t *image, uint32_t *size) {
+    if (read_source_file(path) < 0) return -1;
+    if (cc_compile(source_buffer, image, TERM_SCX_MAX, size) < 0) {
         term_print("C error: ");
-        term_println(ci_last_error() ? ci_last_error() : "invalid source");
+        term_println(cc_last_error());
+        return -1;
+    }
+    return 0;
+}
+
+static int run_scx(uint8_t *image, uint32_t size) {
+    if (size < sizeof(struct scx_header)) {
+        term_println("run: invalid SCX image");
+        return -1;
+    }
+    struct scx_header *header = (struct scx_header *)image;
+    if (header->magic != SOLIS_SCX_MAGIC || header->version != SOLIS_SCX_VERSION ||
+        header->header_size != sizeof(struct scx_header) ||
+        header->code_size == 0 || header->code_size > SOLIS_JIT_MAX_CODE ||
+        header->data_size > SOLIS_JIT_MAX_DATA ||
+        (uint32_t)sizeof(struct scx_header) + header->code_size + header->data_size > size) {
+        term_println("run: invalid SCX image");
+        return -1;
+    }
+    uint8_t *code = image + sizeof(struct scx_header);
+    uint8_t *data = code + header->code_size;
+    int status = jit_execute(code, header->code_size, data, header->data_size);
+    term_print("Program exited with status ");
+    char status_text[16];
+    int_to_str(status, status_text);
+    term_println(status_text);
+    return status;
+}
+
+static void shell_compile_c(const char *path) {
+    char output[96];
+    uint32_t image_size = 0;
+    make_scx_path(path, output, sizeof(output));
+    if (compile_c_to_image(path, cc_image, &image_size) < 0) return;
+    if (write_file_bytes(output, cc_image, image_size) < 0) {
+        term_println("cc: could not write output image");
         return;
     }
-    term_println("C source is valid.");
+    term_print("Compiled ");
+    term_print(path);
+    term_print(" -> ");
+    term_print(output);
+    term_print(" (");
+    char size_text[16];
+    int_to_str((int)image_size, size_text);
+    term_print(size_text);
+    term_println(" bytes)");
 }
 
 static void shell_run_source(const char *language, const char *path) {
-    if (!str_eq(language, "c")) {
-        term_println("Lua source execution is not available.");
+    if (str_eq(language, "lua")) {
+        if (read_source_file(path) < 0) return;
+        if (lua_run(source_buffer, term_putchar) < 0) {
+            term_print("Lua error: ");
+            term_println(lua_last_error());
+        }
         return;
     }
-    if (read_source_file(path) < 0) return;
-
-    ci_set_putchar(term_putchar);
-    if (ci_run(source_buffer) < 0) {
-        term_print("C error: ");
-        term_println(ci_last_error() ? ci_last_error() : "execution failed");
+    if (str_eq(language, "scx")) {
+        int size = read_file_bytes(path, scx_image, sizeof(scx_image));
+        if (size <= 0) {
+            term_println("run: cannot read SCX image");
+            return;
+        }
+        run_scx(scx_image, (uint32_t)size);
+        return;
     }
+    uint32_t image_size = 0;
+    if (compile_c_to_image(path, cc_image, &image_size) < 0) return;
+    run_scx(cc_image, image_size);
 }
 
 static void shell_execute(const char *cmd) {
@@ -199,9 +375,14 @@ static void shell_execute(const char *cmd) {
     command[ci] = '\0';
     while (*cmd == ' ') cmd++;
 
+    if (str_eq(command, "history")) {
+        history_print();
+        return;
+    }
     if (str_eq(command, "help")) {
         term_println("Commands:");
         term_println("  help           - show this help");
+        term_println("  history        - show recent commands");
         term_println("  echo <text>    - print text");
         term_println("  clear          - clear screen");
         term_println("  ls             - list files");
@@ -212,13 +393,16 @@ static void shell_execute(const char *cmd) {
         term_println("  rm <file>      - delete a file");
         term_println("  write <f> <t>  - write text to file");
         term_println("  touch <file>   - create empty file");
-        term_println("  lua <file>     - Lua source runner (unavailable)");
-        term_println("  cc <file.c>    - compile-check C source");
-        term_println("  run <file.c>   - run C source");
+        term_println("  lua <file.lua> - run Lua source");
+        term_println("  cc <file.c>    - compile C to native .scx");
+        term_println("  run <file.c>   - compile and run C source");
+        term_println("  run <file.scx> - run compiled native image");
         term_println("  cp <src> <dst> - copy a file");
         term_println("  mv <src> <dst> - rename/move a file");
         term_println("  hexdump <file> - hex view of a file");
         term_println("  uptime         - show system uptime");
+        term_println("  df             - show SolFS storage usage");
+        term_println("  passwd         - change your account password");
         term_println("  reboot         - restart the system");
         term_println("  calc <a> <op> <b> - calculate a+b, a-b, a*b, a/b");
         term_println("  neofetch       - Helios system overview");
@@ -237,6 +421,43 @@ static void shell_execute(const char *cmd) {
 
     } else if (str_eq(command, "pwd")) {
         term_println(vfs_get_cwd());
+
+    } else if (str_eq(command, "df")) {
+        uint64_t total = solfs_get_total_bytes();
+        uint64_t free_bytes = solfs_get_free_bytes();
+        if (!solfs_is_mounted() || total == 0) {
+            term_println("df: SolFS is not mounted");
+            return;
+        }
+        uint64_t used = total > free_bytes ? total - free_bytes : 0;
+        char total_str[16], used_str[16], free_str[16];
+        int_to_str((int)(total / 1024), total_str);
+        int_to_str((int)(used / 1024), used_str);
+        int_to_str((int)(free_bytes / 1024), free_str);
+        term_println("Filesystem      Total    Used    Free");
+        term_print("SolisFS         ");
+        term_print(total_str);
+        term_print(" KB  ");
+        term_print(used_str);
+        term_print(" KB  ");
+        term_print(free_str);
+        term_println(" KB");
+
+    } else if (str_eq(command, "passwd")) {
+        if (*cmd) {
+            term_println("Usage: passwd");
+            return;
+        }
+        if (!setup_is_installed()) {
+            term_println("passwd: no local account is installed");
+            return;
+        }
+        passwd_input = true;
+        passwd_stage = 0;
+        passwd_len = 0;
+        passwd_first[0] = '\0';
+        passwd_second[0] = '\0';
+        term_print("New password: ");
 
     } else if (str_eq(command, "cd")) {
         if (vfs_cd(*cmd ? cmd : 0) != 0) {
@@ -561,13 +782,15 @@ static void shell_execute(const char *cmd) {
 
     } else if (str_eq(command, "run")) {
         if (!*cmd) {
-            term_println("Usage: run <file.lua|file.c>");
+            term_println("Usage: run <file.lua|file.c|file.scx>");
         } else if (lang_has_suffix(cmd, ".lua")) {
             shell_run_source("lua", cmd);
         } else if (lang_has_suffix(cmd, ".c")) {
             shell_run_source("c", cmd);
+        } else if (lang_has_suffix(cmd, ".scx")) {
+            shell_run_source("scx", cmd);
         } else {
-            term_println("run: use a .lua or .c source file");
+            term_println("run: use a .lua, .c, or .scx file");
         }
 
     } else if (str_eq(command, "solpkg")) {
@@ -783,6 +1006,7 @@ void term_init(void) {
     term_row = 0;
     term_col = 0;
     line_pos = 0;
+    passwd_reset();
     term_print("Solis OS Terminal v0.2 (VFS enabled)\n");
     term_print("Type 'help' for commands.\n");
     shell_prompt();
@@ -824,12 +1048,62 @@ void term_draw(int x, int y, int w, int h) {
 }
 
 void term_handle_key(char key) {
+    if (passwd_input) {
+        if (key == 0x1b) {
+            term_putchar('\n');
+            term_println("Password unchanged.");
+            passwd_reset();
+            shell_prompt();
+            return;
+        }
+        if (key == '\n') {
+            term_putchar('\n');
+            if (passwd_len < 4) {
+                term_println("Password must be at least 4 characters.");
+                passwd_reset();
+                shell_prompt();
+                return;
+            }
+            if (passwd_stage == 0) {
+                passwd_stage = 1;
+                passwd_len = 0;
+                term_print("Confirm password: ");
+                return;
+            }
+            if (!str_eq(passwd_first, passwd_second)) {
+                term_println("Passwords do not match.");
+                passwd_reset();
+                shell_prompt();
+                return;
+            }
+            if (setup_change_password(passwd_first) == 0) {
+                term_println("Password updated.");
+            } else {
+                term_println("Could not update the password.");
+            }
+            passwd_reset();
+            shell_prompt();
+            return;
+        }
+        if (key == '\b') {
+            if (passwd_len > 0) passwd_len--;
+            return;
+        }
+        if (key >= 32 && key < 127) {
+            char *field = passwd_stage == 0 ? passwd_first : passwd_second;
+            if (passwd_len < SETUP_PASSWORD_MAX - 1)
+                field[passwd_len++] = key;
+            field[passwd_len] = '\0';
+        }
+        return;
+    }
     if (key == '\n') {
         line_buf[line_pos] = '\0';
         term_putchar('\n');
+        history_add(line_buf);
         shell_execute(line_buf);
         line_pos = 0;
-        shell_prompt();
+        if (!passwd_input) shell_prompt();
     } else if (key == '\b') {
         if (line_pos > 0) {
             line_pos--;
