@@ -56,9 +56,7 @@ extern char _binary_build_spx_calculator_spx_end[];
 extern char _binary_build_spx_doom_spx_start[];
 extern char _binary_build_spx_doom_spx_end[];
 extern char _binary_build_spx_browser_spx_start[];
-extern char _binary_build_spx_ck3_spx_start[];
 extern char _binary_build_spx_browser_spx_end[];
-extern char _binary_build_spx_ck3_spx_end[];
 
 void __attribute__((noreturn)) kernel_panic(const char *message) {
     console_set_color(0x0F, 0x04);
@@ -161,9 +159,6 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
            {"browser.spx",
             (const uint8_t *)_binary_build_spx_browser_spx_start,
             (uint32_t)(_binary_build_spx_browser_spx_end - _binary_build_spx_browser_spx_start)},
-           {"ck3.spx",
-            (const uint8_t *)_binary_build_spx_ck3_spx_start,
-            (uint32_t)(_binary_build_spx_ck3_spx_end - _binary_build_spx_ck3_spx_start)},
     };
         spx_init(spx_apps, (int)(sizeof(spx_apps) / sizeof(spx_apps[0])));
     if (setup_is_installed()) setup_apply_edition();

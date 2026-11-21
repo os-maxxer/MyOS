@@ -106,7 +106,6 @@ SPX_EMBED_OBJS := \
 	$(SPX_DIR)/editor_spx_embed.o \
 	$(SPX_DIR)/tetris_spx_embed.o \
 	$(SPX_DIR)/blocks_spx_embed.o \
-	$(SPX_DIR)/ck3_spx_embed.o \
 	$(SPX_DIR)/calculator_spx_embed.o
 
 SPX_EMBED_OBJS += $(SPX_DIR)/doom_spx_embed.o
@@ -557,8 +556,6 @@ $(SPX_DIR)/ck3.spx: $(SPX_DIR)/ck3.bin tools/mkspx.py
 	bss=$$(size -A $(SPX_DIR)/ck3.elf | awk '$$1 == ".bss" { print $$2 }'); \
 	python3 tools/mkspx.py $< CK3 $@ $${bss:-0} 0x03700000
 
-$(SPX_DIR)/ck3_spx_embed.o: $(SPX_DIR)/ck3.spx
-	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
 
 # --- Calculator ---
 $(SPX_DIR)/calculator.o: $(APPS_DIR)/calculator.c | $(SPX_DIR)

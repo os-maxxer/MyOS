@@ -173,6 +173,7 @@ static void print_help(void) {
     add_line("  repo add <url>      set repo, e.g. http://10.0.2.2:8000");
     add_line("  repo-list           show packages in the repo");
     add_line("  fetch <name>        download and install a package");
+    add_line("  launch <name>       start an installed package");
     add_line("");
     add_line("  clear               clear the screen");
     add_line("  help                show this help");
@@ -446,7 +447,7 @@ static int install_buffer(uint32_t size, const char *label) {
     sb_str(&b, " in slot ");
     sb_num(&b, (uint32_t)slot);
     add_line(msg);
-    add_line("Launch it from the desktop or Start menu.");
+    add_line("Start it with: launch <name>");
     return slot;
 }
 
@@ -797,6 +798,43 @@ static void cmd_purge(const char *name) {
     add_line(msg);
 }
 
+static void cmd_launch(const char *arg) {
+    while (*arg == ' ') arg++;
+    if (!*arg) {
+        add_line("Usage: launch <name>");
+        return;
+    }
+
+    char wanted[SPX_NAME_LEN];
+    int n = 0;
+    while (arg[n] && arg[n] != ' ' && n < SPX_NAME_LEN - 1) {
+        wanted[n] = lower(arg[n]);
+        n++;
+    }
+    wanted[n] = (char)0;
+
+    char names[SPX_MAX_APPS][SPX_NAME_LEN];
+    int count = spx_list_installed(names, SPX_MAX_APPS);
+    for (int i = 0; i < count; i++) {
+        int k = 0;
+        while (wanted[k] && names[i][k] && lower(names[i][k]) == wanted[k]) k++;
+        if (wanted[k] || names[i][k]) continue;
+        int slot = spx_find_slot(names[i]);
+        if (slot < 0 || gui_launch_app(slot) < 0) {
+            add_line("Could not open a window for it.");
+            return;
+        }
+        char msg[64];
+        struct sbuf b;
+        sb_init(&b, msg, sizeof(msg));
+        sb_str(&b, "Launched ");
+        sb_str(&b, names[i]);
+        add_line(msg);
+        return;
+    }
+    add_line("Not installed. Try: search, then fetch <name>.");
+}
+
 static void cmd_execute(const char *cmd) {
     while (*cmd == ' ') cmd++;
     if (!*cmd) return;
@@ -828,6 +866,8 @@ static void cmd_execute(const char *cmd) {
         cmd_repo_add(cmd);
     } else if (str_eq(command, "repo-list")) {
         cmd_repo_list(cmd);
+    } else if (str_eq(command, "launch")) {
+        cmd_launch(cmd);
     } else if (str_eq(command, "fetch")) {
         cmd_fetch(cmd);
     } else if (str_eq(command, "upgrade")) {

@@ -150,6 +150,10 @@ static bool guest_session = false;
 static bool gui_app_allowed(int slot) {
     if (slot < 0 || slot >= SPX_MAX_APPS) return false;
     if (!spx_get_exports(slot)) return false;
+    /* CK3 ships only as a SOLPKG package; once installed it may run in
+     * every edition, but nothing on the desktop or Start menu advertises
+     * it. */
+    if (slot == SPX_CK3) return true;
     int edition = setup_edition();
     if (slot == SPX_DOOM) return edition == SETUP_EDITION_EXTRA;
     if (slot == SPX_BROWSER) {
@@ -308,13 +312,13 @@ static const struct {
     {"CK3",          13, 0xFFC8A24A},
 };
 
-#define DESKTOP_ICON_COUNT 10
+#define DESKTOP_ICON_COUNT 9
 static const struct { int x; int y; } desktop_icon_positions[DESKTOP_ICON_COUNT] = {
     {28, 60}, {116, 60}, {204, 60}, {292, 60}, {380, 60},
-    {28, 160}, {116, 160}, {204, 160}, {292, 160}, {380, 160},
+    {28, 160}, {116, 160}, {204, 160}, {292, 160},
 };
 static const int desktop_icon_slots[DESKTOP_ICON_COUNT] = {
-    0, 1, 2, 3, 4, 7, 8, SPX_DOOM, SPX_BROWSER, SPX_CK3
+    0, 1, 2, 3, 4, 7, 8, SPX_DOOM, SPX_BROWSER
 };
 
 static void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
@@ -1479,7 +1483,6 @@ static const struct menu_item menu_items[] = {
     {2, 0, "Games"},
     {0, 8, "Tetris"},
     {0, 9, "Solis Blocks"},
-    {0, 13, "Crusader Kings"},
     {0, 11, "Doom"},
     {2, 0, "Settings"},
     {0, 3, "Settings"},
