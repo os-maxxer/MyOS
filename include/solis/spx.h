@@ -51,7 +51,9 @@ struct app_exports {
 
 #define SPX_SLOT_BASE   0x01000000
 /* Each built-in app gets 3 MiB of code/BSS space. Bases stay 3 MiB apart
- * and stop below the Doom heap at 0x04000000. */
+ * so fourteen slots end at 0x03A00000, where the kernel's user-image
+ * staging buffer starts. That buffer is mapped read/write but never
+ * executable, so app code must not be loaded into it. */
 #define SPX_SLOT_SIZE   0x00300000
 #define SPX_SLOT_BASE_FOR(slot) (SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)(slot))
 

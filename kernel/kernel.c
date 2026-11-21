@@ -28,6 +28,9 @@
 #include <solis/doom.h>
 #include <solis/audio.h>
 
+extern char __frame_stage_start[];
+extern char __frame_stage_end[];
+
 extern char _binary_build_spx_terminal_spx_start[];
 extern char _binary_build_spx_terminal_spx_end[];
 extern char _binary_build_spx_notepad_spx_start[];
@@ -79,8 +82,11 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
         kernel_panic("Physical memory map initialization failed");
     if (!pmm_reserve(SOLIS_DOOM_HEAP_BASE, SOLIS_DOOM_HEAP_END))
         kernel_panic("Could not reserve the Doom working set");
-    if (!pmm_reserve(0x08000000ULL, 0x09000000ULL))
+    if (!pmm_reserve(0x08000000ULL, 0x0A000000ULL))
         kernel_panic("Could not reserve the desktop cache region");
+    if (!pmm_reserve((uintptr_t)__frame_stage_start,
+                     (uintptr_t)__frame_stage_end))
+        kernel_panic("Could not reserve the desktop frame stage");
     if (!vmm_init())
         kernel_panic("Virtual memory initialization failed");
     console_write("[MEM] 4 KiB allocator and kernel page protections ready; free=");

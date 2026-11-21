@@ -43,19 +43,15 @@ SECTIONS {
         __bss_end = .;
     }
 
-    /* Thirteen SPX slots occupy 16-55 MiB (0x01000000-0x03700000). Keep the
-     * staging buffers beyond them so loading the last app cannot overwrite
-     * either stage; both still fit below the Doom heap at 0x04000000. */
-    .user_image_stage 0x03700000 (NOLOAD) : {
+    /* Fourteen SPX slots occupy 16-58 MiB (0x01000000-0x03A00000). The user
+     * image staging buffer sits immediately above them and the scaled frame
+     * buffer lives above the desktop cache, so loading the last app cannot
+     * overwrite either stage. Both stages are mapped read/write and never
+     * executable, so app code must never be loaded into them. */
+    .user_image_stage 0x03A00000 (NOLOAD) : {
         __user_image_stage_start = .;
         *(.user_image_stage)
         __user_image_stage_end = .;
-    }
-
-    .frame_stage 0x03800000 (NOLOAD) : {
-        __frame_stage_start = .;
-        *(.frame_stage)
-        __frame_stage_end = .;
     }
 
     __kernel_end = .;
@@ -69,6 +65,12 @@ SECTIONS {
         *(.gui_cache)
         . = ALIGN(4K);
         __gui_cache_end = .;
+    }
+
+    .frame_stage 0x0A000000 (NOLOAD) : {
+        __frame_stage_start = .;
+        *(.frame_stage)
+        __frame_stage_end = .;
     }
 
     ASSERT(__bss_end <= 0x01000000, "Kernel BSS overlaps SPX app slots")
