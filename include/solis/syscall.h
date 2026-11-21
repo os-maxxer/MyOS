@@ -4,6 +4,7 @@
 #include <solis/types.h>
 #include <solis/rtc.h>
 #include <solis/dbg.h>
+#include <solis/net.h>
 #include <stdbool.h>
 
 #define SYSCALL_TABLE_ADDR 0x00007E00
@@ -130,6 +131,11 @@ struct syscall_table {
     const struct app_exports *(*spx_get_exports)(int slot);
     int (*spx_slot_for_base)(uint32_t base);
     int (*gui_app_window)(int slot);
+
+    /* Incremental download so SOLPKG can draw a progress bar. */
+    int  (*net_dl_begin)(const char *url, uint8_t *buf, uint32_t max_size);
+    int  (*net_dl_step)(struct net_dl_progress *progress);
+    void (*net_dl_abort)(void);
 };
 
 #endif

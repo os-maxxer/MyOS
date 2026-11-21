@@ -2110,3 +2110,187 @@ int net_http_get(const uint8_t *ip, uint16_t port,
     dbg_print("[HTTP] Too many redirects\n");
     return -1;
 }
+
+/* ------------------------------------------------------------------ */
+/* Incremental download (SOLPKG)                                       */
+/*                                                                     */
+/* The package manager needs to show a progress bar, which a blocking  */
+/* get cannot do: nothing repaints until it returns. This layer keeps  */
+/* the transfer state in the kernel and hands the caller one chunk at  */
+/* a time, so the app's tick can redraw between steps. HTTPS uses the  */
+/* streaming TLS session; plain HTTP still completes in a single step. */
+/* ------------------------------------------------------------------ */
+
+#define NET_DL_CHUNK 4096
+
+static struct {
+    int active;
+    int secure;
+    int finished;
+    uint8_t *buf;
+    uint32_t max;
+    uint8_t ip[4];
+    uint16_t port;
+    char host[64];
+    char path[512];
+    int raw;        /* raw response bytes in buf (headers included) */
+    int body_off;   /* start of the body, -1 until headers are complete */
+    int length;     /* content-length, -1 when unknown */
+    int chunked;
+    int status;
+} dl;
+
+static void dl_copy_str(char *dst, int max, const char *src) {
+    int i = 0;
+    while (src && src[i] && i < max - 1) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+}
+
+static void dl_reset(void) {
+    dl.active = 0;
+    dl.secure = 0;
+    dl.finished = 0;
+    dl.buf = 0;
+    dl.max = 0;
+    dl.port = 0;
+    dl.host[0] = '\0';
+    dl.path[0] = '\0';
+    dl.raw = 0;
+    dl.body_off = -1;
+    dl.length = -1;
+    dl.chunked = 0;
+    dl.status = 0;
+}
+
+/* 1 when the header block has been parsed, 0 while more bytes are needed. */
+static int dl_parse_headers(void) {
+    if (dl.body_off >= 0) return 1;
+    struct http_response hr;
+    if (http_parse_response_ex(dl.buf, dl.raw, &hr) < 0) return 0;
+    dl.body_off = hr.body_offset;
+    dl.status = hr.status_code;
+    dl.length = hr.content_length;
+    dl.chunked = hr.is_chunked;
+    return 1;
+}
+
+int net_dl_begin(const char *url, uint8_t *buf, uint32_t max_size) {
+    dl_reset();
+    if (!net_ready || !url || !buf || max_size < 128) return -1;
+    if (!net_available()) return -1;
+
+    struct http_url target;
+    int secure = 0;
+    if (url[0] == 'h' && url[1] == 't' && url[2] == 't' && url[3] == 'p' &&
+        url[4] == 's') {
+        if (parse_https_url(url, &target) < 0) return -1;
+        secure = 1;
+    } else if (parse_http_url(url, &target) < 0) {
+        return -1;
+    }
+
+    uint8_t ip[4];
+    if (net_parse_ipv4(target.host, ip) < 0 &&
+        net_dns_resolve(target.host, ip) < 0)
+        return -1;
+
+    dl.buf = buf;
+    dl.max = max_size;
+    dl.secure = secure;
+    dl.port = target.port;
+    for (int i = 0; i < 4; i++) dl.ip[i] = ip[i];
+    dl_copy_str(dl.host, sizeof dl.host, target.host);
+    dl_copy_str(dl.path, sizeof dl.path, target.path);
+
+    if (secure) {
+        if (tls_stream_open(dl.ip, dl.port, dl.host, dl.path) < 0)
+            return -1;
+        dl.active = 1;
+        return 0;
+    }
+
+    int n = net_http_get(dl.ip, dl.port, dl.host, dl.path, buf, max_size);
+    if (n <= 0) return -1;
+    dl.raw = n;
+    dl.active = 1;
+    dl.finished = 1;
+    return 0;
+}
+
+/* Move the body to the front of the buffer and report the final size. */
+static int dl_complete(struct net_dl_progress *progress) {
+    if (!dl_parse_headers()) return -1;
+    if (dl.status < 200 || dl.status >= 300) return -1;
+
+    int body = dl.raw - dl.body_off;
+    if (body < 0) body = 0;
+    if (dl.chunked) {
+        int decoded = http_decode_chunked(dl.buf, dl.body_off, dl.raw);
+        if (decoded < 0) return -1;
+        body = decoded;
+    } else if (dl.length >= 0 && body > dl.length) {
+        body = dl.length;
+    }
+    if (body > (int)dl.max) body = (int)dl.max;
+
+    for (int i = 0; i < body; i++) dl.buf[i] = dl.buf[dl.body_off + i];
+    dl.raw = body;
+    dl.active = 0;
+    if (dl.secure) tls_stream_close();
+
+    progress->received = body;
+    progress->total = body;
+    progress->status = dl.status;
+    return 1;
+}
+
+int net_dl_step(struct net_dl_progress *progress) {
+    if (!progress) return -1;
+    progress->received = 0;
+    progress->total = -1;
+    progress->status = 0;
+    if (!dl.active) return -1;
+
+    if (!dl.finished) {
+        uint32_t room = dl.max - (uint32_t)dl.raw;
+        uint32_t want = room < NET_DL_CHUNK ? room : NET_DL_CHUNK;
+        if (want == 0) {
+            dl.finished = 1;
+        } else {
+            int n = tls_stream_read(dl.buf + dl.raw, want);
+            if (n > 0) {
+                dl.raw += n;
+            } else if (n == 0) {
+                dl.finished = 1;
+            } else {
+                /* A timeout after the last body byte is still a success.
+                 * Servers may hold the connection open after the body. */
+                int got = dl_parse_headers() ? dl.raw - dl.body_off : 0;
+                if (dl.length < 0 || got < dl.length) return -1;
+                dl.finished = 1;
+            }
+        }
+    }
+
+    if (dl_parse_headers()) {
+        progress->status = dl.status;
+        int got = dl.raw - dl.body_off;
+        if (got < 0) got = 0;
+        if (dl.length >= 0) {
+            progress->total = dl.length;
+            progress->received = got > dl.length ? dl.length : got;
+            if (got >= dl.length) dl.finished = 1;
+        } else {
+            progress->total = -1;
+            progress->received = got;
+        }
+    }
+
+    if (!dl.finished) return 0;
+    return dl_complete(progress);
+}
+
+void net_dl_abort(void) {
+    if (dl.secure) tls_stream_close();
+    dl_reset();
+}

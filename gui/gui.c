@@ -150,9 +150,9 @@ static bool guest_session = false;
 static bool gui_app_allowed(int slot) {
     if (slot < 0 || slot >= SPX_MAX_APPS) return false;
     if (!spx_get_exports(slot)) return false;
-    /* CK3 ships only as a SOLPKG package; once installed it may run in
-     * every edition, but nothing on the desktop or Start menu advertises
-     * it. */
+    /* CK3 ships only as a SOLPKG package. Until it is installed the slot is
+     * empty, so the desktop icon list (built from gui_app_allowed) has no
+     * entry for it; once installed it runs in every edition. */
     if (slot == SPX_CK3) return true;
     int edition = setup_edition();
     if (slot == SPX_DOOM) return edition == SETUP_EDITION_EXTRA;
@@ -312,14 +312,19 @@ static const struct {
     {"CK3",          13, 0xFFC8A24A},
 };
 
-#define DESKTOP_ICON_COUNT 9
-static const struct { int x; int y; } desktop_icon_positions[DESKTOP_ICON_COUNT] = {
+/* The desktop shows every installed app that the edition allows, so a
+ * package installed from SOLPKG appears on the desktop without a reboot. */
+#define DESKTOP_ICON_MAX 15
+static const struct { int x; int y; } desktop_icon_positions[DESKTOP_ICON_MAX] = {
     {28, 60}, {116, 60}, {204, 60}, {292, 60}, {380, 60},
-    {28, 160}, {116, 160}, {204, 160}, {292, 160},
+    {28, 160}, {116, 160}, {204, 160}, {292, 160}, {380, 160},
+    {28, 260}, {116, 260}, {204, 260}, {292, 260}, {380, 260},
 };
-static const int desktop_icon_slots[DESKTOP_ICON_COUNT] = {
-    0, 1, 2, 3, 4, 7, 8, SPX_DOOM, SPX_BROWSER
-};
+static int desktop_icon_slots[DESKTOP_ICON_MAX];
+static int desktop_icon_count;
+static uint32_t desktop_icon_sig;
+
+static void desktop_icons_refresh(void);
 
 static void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
 
@@ -1095,10 +1100,9 @@ static void draw_voxel_bg(void) {
 }
 
 static void draw_desktop_icons(void) {
-    for (int i = 0; i < DESKTOP_ICON_COUNT; i++) {
+    desktop_icons_refresh();
+    for (int i = 0; i < desktop_icon_count && i < DESKTOP_ICON_MAX; i++) {
         int slot = desktop_icon_slots[i];
-        if (slot == SPX_DOOM && !gui_app_allowed(slot)) slot = SPX_CALCULATOR;
-        if (!gui_app_allowed(slot)) continue;
         int x = desktop_icon_positions[i].x;
         int y = desktop_icon_positions[i].y;
         draw_app_glyph(x, y, 56, slot);
@@ -1145,6 +1149,24 @@ static void gui_draw_desktop(void) {
 static void bg_cache_invalidate(void) {
     bg_cache_valid = false;
     bg_cache_usable = false;
+}
+
+/* Rebuild the desktop icon list from what is actually installed. The cached
+ * desktop is dropped when that set changes, so an install shows up at once. */
+static void desktop_icons_refresh(void) {
+    uint32_t sig = 0;
+    int count = 0;
+    int slots[DESKTOP_ICON_MAX];
+    for (int slot = 0; slot < SPX_MAX_APPS && count < DESKTOP_ICON_MAX; slot++) {
+        if (!gui_app_allowed(slot)) continue;
+        sig |= 1u << slot;
+        slots[count++] = slot;
+    }
+    if (sig == desktop_icon_sig && count == desktop_icon_count) return;
+    desktop_icon_sig = sig;
+    desktop_icon_count = count;
+    for (int i = 0; i < count; i++) desktop_icon_slots[i] = slots[i];
+    bg_cache_invalidate();
 }
 static void bg_cache_capture(void) {
     uint32_t w = graphics_get_width();
@@ -2487,10 +2509,9 @@ static bool pt_in_rect(int px, int py, const struct gui_rect *r) {
 }
 
 static int desktop_icon_at(int x, int y) {
-    for (int i = 0; i < DESKTOP_ICON_COUNT; i++) {
+    desktop_icons_refresh();
+    for (int i = 0; i < desktop_icon_count && i < DESKTOP_ICON_MAX; i++) {
         int slot = desktop_icon_slots[i];
-        if (slot == SPX_DOOM && !gui_app_allowed(slot)) slot = SPX_CALCULATOR;
-        if (!gui_app_allowed(slot)) continue;
         int left = desktop_icon_positions[i].x - 8;
         int top = desktop_icon_positions[i].y - 8;
         if (x >= left && x < left + 72 && y >= top && y < top + 90)
@@ -2889,9 +2910,20 @@ void gui_update_clock(void) {
  * trail of stale frames. */
 void gui_tick(void) {
     static uint32_t last_tick = 0;
+    static int desktop_poll = 0;
     uint32_t now = timer_get_ticks();
     if ((uint32_t)(now - last_tick) < 5) return;
     last_tick = now;
+
+    /* Pick up installs and uninstalls made while the desktop is idle. */
+    if (++desktop_poll >= 10) {
+        desktop_poll = 0;
+        uint32_t before = desktop_icon_sig;
+        int count = desktop_icon_count;
+        desktop_icons_refresh();
+        if (before != desktop_icon_sig || count != desktop_icon_count)
+            gui_damage_all();
+    }
 
     for (int i = 0; i < MAX_WINDOWS; i++) {
         struct gui_window *w = &windows[i];

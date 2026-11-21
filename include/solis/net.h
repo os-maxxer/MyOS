@@ -61,4 +61,21 @@ int net_https_get(const uint8_t *ip, uint16_t port,
 
 int net_dns_resolve(const char *hostname, uint8_t *ip_out);
 
+/* Incremental transfer used by SOLPKG.
+ *
+ * begin() resolves the URL, connects and sends the request. step() blocks
+ * only until the next piece of the response has arrived, so an app that is
+ * called from the window tick can repaint a progress bar between steps. On
+ * completion step() returns 1 and the response body (the package image) is
+ * at buf[0..progress->received). A negative return is a failure. */
+struct net_dl_progress {
+    int received;   /* body bytes stored so far */
+    int total;      /* body length, or -1 when the server did not say */
+    int status;     /* HTTP status code, 0 until the headers arrive */
+};
+
+int  net_dl_begin(const char *url, uint8_t *buf, uint32_t max_size);
+int  net_dl_step(struct net_dl_progress *progress);
+void net_dl_abort(void);
+
 #endif

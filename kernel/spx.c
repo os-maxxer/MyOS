@@ -206,6 +206,9 @@ void spx_init_syscalls(void) {
     sys_table.spx_get_exports       = spx_get_exports;
     sys_table.spx_slot_for_base     = spx_slot_for_base;
     sys_table.gui_app_window        = gui_app_window;
+    sys_table.net_dl_begin          = net_dl_begin;
+    sys_table.net_dl_step           = net_dl_step;
+    sys_table.net_dl_abort          = net_dl_abort;
 
     struct syscall_table *target = (struct syscall_table *)SYSCALL_TABLE_ADDR;
     *target = sys_table;

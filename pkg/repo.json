@@ -10,6 +10,7 @@
             "author": "Solis OS",
             "file": "terminal/terminal.spx",
             "legacy": "terminal.npx",
+            "size": 76240,
             "slot": 0
         },
         {
@@ -19,15 +20,17 @@
             "author": "Solis OS",
             "file": "notepad/notepad.spx",
             "legacy": "notepad.npx",
+            "size": 6552,
             "slot": 1
         },
         {
             "name": "paint",
             "version": "1.1.0",
-            "description": "Small drawing app that saves PNG-free art",
+            "description": "Small drawing app with brushes and fills",
             "author": "Solis OS",
             "file": "paint/paint.spx",
             "legacy": "paint.npx",
+            "size": 6888,
             "slot": 2
         },
         {
@@ -37,6 +40,7 @@
             "author": "Solis OS",
             "file": "settings/settings.spx",
             "legacy": "settings.npx",
+            "size": 19400,
             "slot": 3
         },
         {
@@ -46,6 +50,7 @@
             "author": "Solis OS",
             "file": "filebrowser/filebrowser.spx",
             "legacy": "filebrowser.npx",
+            "size": 10712,
             "slot": 4
         },
         {
@@ -55,15 +60,17 @@
             "author": "Solis OS",
             "file": "taskmanager/taskmanager.spx",
             "legacy": "taskmanager.npx",
+            "size": 5080,
             "slot": 5
         },
         {
             "name": "solpkg",
-            "version": "1.1.0",
-            "description": "This package manager - install, fetch, upgrade",
+            "version": "1.2.1",
+            "description": "Package manager: fetch with size, confirm, progress",
             "author": "Solis OS",
             "file": "solpkg/solpkg.spx",
             "legacy": "solpkg.npx",
+            "size": 21232,
             "slot": 6
         },
         {
@@ -73,6 +80,7 @@
             "author": "Solis OS",
             "file": "editor/editor.spx",
             "legacy": "editor.npx",
+            "size": 14896,
             "slot": 7
         },
         {
@@ -82,6 +90,7 @@
             "author": "Solis OS",
             "file": "tetris/tetris.spx",
             "legacy": "tetris.npx",
+            "size": 9008,
             "slot": 8
         },
         {
@@ -91,6 +100,7 @@
             "author": "Solis OS",
             "file": "blocks/blocks.spx",
             "legacy": "blocks.npx",
+            "size": 16840,
             "slot": 9
         },
         {
@@ -100,6 +110,7 @@
             "author": "Solis OS",
             "file": "calculator/calculator.spx",
             "legacy": "calculator.npx",
+            "size": 5936,
             "slot": 10
         },
         {
@@ -109,6 +120,7 @@
             "author": "Solis OS",
             "file": "doom/doom.spx",
             "legacy": "doom.npx",
+            "size": 692968,
             "slot": 11
         },
         {
@@ -118,15 +130,17 @@
             "author": "Solis OS",
             "file": "browser/browser.spx",
             "legacy": "browser.npx",
+            "size": 173120,
             "slot": 12
         },
         {
             "name": "ck3",
-            "version": "1.1.0",
-            "description": "Crusader Kings III - feudal grand strategy",
+            "version": "1.3.0",
+            "description": "Crusader Kings III - real Europe coastline, land-cut provinces",
             "author": "Solis OS",
             "file": "ck3/ck3.spx",
             "legacy": "ck3.npx",
+            "size": 25192,
             "slot": 13
         }
     ]

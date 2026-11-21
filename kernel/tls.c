@@ -22,6 +22,9 @@ extern const br_x509_trust_anchor tls_trust_anchors[];
 extern const size_t tls_trust_anchors_num;
 
 #define TLS_TIMEOUT_TICKS  500
+/* Streaming reads use a short timeout so a stalled transfer hands control
+ * back to the caller instead of freezing the whole desktop. */
+#define TLS_STREAM_TIMEOUT 150
 #define TLS_REQUEST_MAX    768
 
 static br_ssl_client_context tls_cc;
@@ -138,6 +141,76 @@ static int tls_append(char *dst, int max, int *pos, const char *src) {
     }
     dst[*pos] = '\0';
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Streaming session (SOLPKG progress bar)                             */
+/* ------------------------------------------------------------------ */
+
+static struct net_tcp_conn tls_stream_conn;
+static br_sslio_context tls_stream_ioc;
+static int tls_stream_active;
+
+static int tls_stream_low_read(void *ctx, unsigned char *data, size_t len) {
+    struct net_tcp_conn *conn = (struct net_tcp_conn *)ctx;
+    int n = net_tcp_read(conn, data, (int)len, TLS_STREAM_TIMEOUT);
+    return n > 0 ? n : -1;
+}
+
+int tls_stream_open(const uint8_t *ip, uint16_t port,
+                    const char *host, const char *path) {
+    if (!ip || !host || !path) return -1;
+    if (!net_available()) return -1;
+    tls_stream_close();
+
+    if (net_tcp_open(&tls_stream_conn, ip, port, TLS_TIMEOUT_TICKS) < 0)
+        return -1;
+
+    br_ssl_client_init_full(&tls_cc, &tls_xc,
+                            tls_trust_anchors, tls_trust_anchors_num);
+    br_ssl_engine_set_buffer(&tls_cc.eng, tls_iobuf, sizeof tls_iobuf, 0);
+
+    unsigned char seed[32];
+    tls_seed_entropy(seed);
+    br_ssl_engine_inject_entropy(&tls_cc.eng, seed, sizeof seed);
+    tls_set_validation_time();
+
+    if (!br_ssl_client_reset(&tls_cc, host, 0))
+        return tls_fail("reset");
+
+    br_sslio_init(&tls_stream_ioc, &tls_cc.eng,
+                  tls_stream_low_read, &tls_stream_conn,
+                  tls_low_write, &tls_stream_conn);
+
+    char request[TLS_REQUEST_MAX];
+    int req_len = 0;
+    if (tls_append(request, sizeof request, &req_len, "GET ") < 0 ||
+        tls_append(request, sizeof request, &req_len, path) < 0 ||
+        tls_append(request, sizeof request, &req_len, " HTTP/1.0\r\nHost: ") < 0 ||
+        tls_append(request, sizeof request, &req_len, host) < 0 ||
+        tls_append(request, sizeof request, &req_len,
+                   "\r\nUser-Agent: SolisSOLPKG/1.0\r\n"
+                   "Accept: */*\r\n"
+                   "Accept-Encoding: identity\r\n"
+                   "Connection: close\r\n\r\n") < 0)
+        return -1;
+
+    if (br_sslio_write_all(&tls_stream_ioc, request, (size_t)req_len) < 0 ||
+        br_sslio_flush(&tls_stream_ioc) < 0)
+        return tls_fail("request");
+
+    tls_stream_active = 1;
+    return 0;
+}
+
+int tls_stream_read(uint8_t *buf, uint32_t max) {
+    if (!tls_stream_active || !buf || max == 0) return -1;
+    int n = br_sslio_read(&tls_stream_ioc, buf, (size_t)max);
+    return n > 0 ? n : (n == 0 ? 0 : -1);
+}
+
+void tls_stream_close(void) {
+    tls_stream_active = 0;
 }
 
 int tls_https_get(const uint8_t *ip, uint16_t port,

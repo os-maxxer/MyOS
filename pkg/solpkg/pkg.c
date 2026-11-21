@@ -4,6 +4,7 @@
 #include <solis/solfs.h>
 #include <solis/vfs.h>
 #include <solis/net.h>
+#include <solis/timer.h>
 #include <stdbool.h>
 
 #define LINE_H 16
@@ -27,9 +28,10 @@ static uint8_t pkg_buf[PKG_BUF_SIZE];
 struct repo_entry {
     char name[24];
     char version[12];
-    char desc[44];
+    char desc[56];
     char file[64];
     int  slot;
+    int  size;      /* bytes, -1 when the manifest does not say */
 };
 
 static struct repo_entry repo_pkgs[MAX_REPO_PKGS];
@@ -106,15 +108,40 @@ static void sb_num(struct sbuf *b, uint32_t n) {
     b->buf[b->len] = '\0';
 }
 
+static void sb_ch(struct sbuf *b, char c) {
+    if (b->len < b->max - 1) {
+        b->buf[b->len++] = c;
+        b->buf[b->len] = '\0';
+    }
+}
+
+/* "21.0 KB (21504 bytes)", like a package size in apt. */
+static void sb_size(struct sbuf *b, int bytes) {
+    if (bytes < 0) { sb_str(b, "unknown"); return; }
+    if (bytes < 1024) { sb_num(b, (uint32_t)bytes); sb_str(b, " B"); return; }
+    sb_num(b, (uint32_t)bytes / 1024);
+    sb_str(b, ".");
+    sb_num(b, ((uint32_t)bytes % 1024) * 10 / 1024);
+    sb_str(b, " KB (");
+    sb_num(b, (uint32_t)bytes);
+    sb_str(b, " bytes)");
+}
+
 static void prompt(void) {
     add_line("solpk> ");
 }
 
-static uint8_t repo_ip[4] = {10, 0, 2, 2};
-static uint16_t repo_port = 8000;
-static char repo_host[64] = "";
-static char repo_host_str[64] = "10.0.2.2";
-static int repo_has_hostname = 0;
+/* The package index lives on the hosted repository, so `fetch` works on a
+ * fresh install without a `repo add` step. The URL is only state so that
+ * `repo add` can still point the manager at a local mirror. */
+#define DEFAULT_REPO_HOST "npk-ehg.pages.dev"
+
+static uint8_t repo_ip[4] = {0, 0, 0, 0};
+static uint16_t repo_port = 443;
+static char repo_host[64] = DEFAULT_REPO_HOST;
+static char repo_host_str[64] = DEFAULT_REPO_HOST;
+static int repo_has_hostname = 1;
+static int repo_secure = 1;
 static char repo_prefix[64] = "";
 
 static void ip_to_str(const uint8_t *ip, char *buf) {
@@ -159,25 +186,39 @@ static int parse_ip(const char *s, uint8_t *ip) {
 }
 
 static void print_help(void) {
-    add_line("SOLPKG 1.1 - Solis Package Manager");
+    add_line("SOLPKG 1.2 - Solis Package Manager");
     add_line("");
     add_line("Packages:");
-    add_line("  search [term]       installed + repo packages");
+    add_line("  search [term]       installed + repository packages");
+    add_line("  fetch <name>        download, confirm and install");
+    add_line("  launch <name>       start an installed package");
+    add_line("  purge <name>        uninstall a package");
+    add_line("  upgrade             reinstall every installed pkg");
     add_line("  install <file.spx>  install a package from disk");
     add_line("  local-list          list .spx files on disk");
     add_line("  local-install <n>   install <n>.spx from disk");
-    add_line("  purge <name>        uninstall a package");
-    add_line("  upgrade             reinstall every installed pkg");
     add_line("");
     add_line("Repository:");
-    add_line("  repo add <url>      set repo, e.g. http://10.0.2.2:8000");
     add_line("  repo-list           show packages in the repo");
-    add_line("  fetch <name>        download and install a package");
-    add_line("  launch <name>       start an installed package");
+    add_line("  repo add <url>      use another repo (http or https)");
     add_line("");
     add_line("  clear               clear the screen");
     add_line("  help                show this help");
     add_line("");
+}
+
+/* "https://host[:port][/prefix]" for messages and for building paths. */
+static void repo_url(char *out, int max) {
+    struct sbuf b;
+    sb_init(&b, out, max);
+    sb_str(&b, repo_secure ? "https://" : "http://");
+    sb_str(&b, repo_host);
+    int default_port = repo_secure ? 443 : 80;
+    if (repo_port != default_port) {
+        sb_str(&b, ":");
+        sb_num(&b, repo_port);
+    }
+    if (repo_prefix[0]) { sb_str(&b, "/"); sb_str(&b, repo_prefix); }
 }
 
 /* ------------------------------------------------------------------ */
@@ -308,6 +349,7 @@ static int parse_manifest(const char *json, int len) {
             e->file[n++] = 'x'; e->file[n] = '\0';
         }
         e->slot = json_int(obj, q, "slot", -1);
+        e->size = json_int(obj, q, "size", -1);
         repo_pkg_count++;
         p = q;
         p = json_skip_ws(p);
@@ -336,8 +378,11 @@ static int fetch_manifest(void) {
     while (*j && pi < 90) path[pi++] = *j++;
     path[pi] = '\0';
 
-    int n = net_http_get(repo_ip, repo_port, repo_host_str, path,
-                         pkg_buf, 65535);
+    int n;
+    if (repo_secure)
+        n = net_https_get(repo_ip, repo_port, repo_host, path, pkg_buf, 65535);
+    else
+        n = net_http_get(repo_ip, repo_port, repo_host_str, path, pkg_buf, 65535);
     if (n <= 0) return -1;
     pkg_buf[n] = '\0';
     return parse_manifest((const char *)pkg_buf, n);
@@ -447,7 +492,7 @@ static int install_buffer(uint32_t size, const char *label) {
     sb_str(&b, " in slot ");
     sb_num(&b, (uint32_t)slot);
     add_line(msg);
-    add_line("Start it with: launch <name>");
+    add_line("It is on the desktop now. Also: launch <name>");
     return slot;
 }
 
@@ -527,7 +572,7 @@ static void cmd_local_install(const char *name) {
 
 static void cmd_repo_add(const char *url) {
     if (!url || !*url) {
-        add_line("Usage: repo add http://hostname:port[/prefix]");
+        add_line("Usage: repo add https://host[:port][/prefix]");
         return;
     }
 
@@ -537,10 +582,16 @@ static void cmd_repo_add(const char *url) {
 
     if (url[0] != 'h' || url[1] != 't' || url[2] != 't' || url[3] != 'p' ||
         url[4] != ':' || url[5] != '/' || url[6] != '/') {
-        add_line("Only http:// URLs are supported.");
+        add_line("Only http:// and https:// URLs are supported.");
         return;
     }
+    int secure = 0;
     url += 7;
+    if (url[0] == 's' && url[1] == '/' && url[2] == '/') {
+        secure = 1;
+        url += 3;
+    }
+    repo_secure = secure;
 
     int hi = 0;
     const char *p = url;
@@ -548,7 +599,7 @@ static void cmd_repo_add(const char *url) {
         repo_host[hi++] = *p++;
     repo_host[hi] = '\0';
 
-    int port = 80;
+    int port = secure ? 443 : 80;
     if (*p == ':') {
         p++;
         port = 0;
@@ -585,24 +636,30 @@ static void cmd_repo_add(const char *url) {
     repo_loaded = false;
     repo_pkg_count = 0;
 
-    char msg[64];
+    char base[96];
+    char msg[128];
     struct sbuf b;
+    repo_url(base, sizeof(base));
     sb_init(&b, msg, sizeof(msg));
     sb_str(&b, "Repo: ");
-    sb_str(&b, repo_host);
-    sb_str(&b, ":");
-    sb_num(&b, repo_port);
-    if (repo_prefix[0]) { sb_str(&b, "/"); sb_str(&b, repo_prefix); }
+    sb_str(&b, base);
     add_line(msg);
 }
 
 static void cmd_repo_list(const char *arg) {
     (void)arg;
-    add_line("Fetching repo index...");
+    add_line("Reading the package index...");
     int count = fetch_manifest();
     if (count <= 0) {
-        add_line("Could not read repo.json.");
-        add_line("Set one with: repo add http://10.0.2.2:8000");
+        char base[96];
+        char msg[128];
+        struct sbuf b;
+        repo_url(base, sizeof(base));
+        sb_init(&b, msg, sizeof(msg));
+        sb_str(&b, "Could not read ");
+        sb_str(&b, base);
+        sb_str(&b, "/repo.json");
+        add_line(msg);
         return;
     }
     add_line("--- Available packages ---");
@@ -659,8 +716,9 @@ static void cmd_search(const char *term) {
     }
     if (!shown) add_line("  (none)");
 
+    if (!repo_loaded) fetch_manifest();
     if (!repo_loaded) {
-        add_line("--- Repo (run repo-list first) ---");
+        add_line("--- Repository offline ---");
         return;
     }
     add_line("--- Repository ---");
@@ -690,62 +748,173 @@ static void cmd_search(const char *term) {
     if (!shown) add_line("  (no match)");
 }
 
+/* ------------------------------------------------------------------ */
+/* fetch: details, confirmation and the download bar                   */
+/*                                                                     */
+/* Like apt: the size is shown first, nothing is downloaded until the  */
+/* user answers, and the transfer draws a bar while it runs. The bar    */
+/* is fed from pkg_tick(), so each step returns to the desktop and the */
+/* window repaints instead of freezing until the download ends.        */
+/* ------------------------------------------------------------------ */
+
+enum { FETCH_IDLE = 0, FETCH_CONFIRM, FETCH_TRANSFER };
+
+static int  fetch_state;
+static char fetch_name[24];
+static char fetch_version[12];
+static char fetch_desc[48];
+static char fetch_file[80];
+static int  fetch_size = -1;
+static int  fetch_total = -1;
+static int  fetch_received;
+static int  fetch_status;
+static int  fetch_final = -1;
+static int  fetch_shown;
+static int  fetch_phase;
+
+static void build_pkg_url(const char *file, char *out, int max) {
+    char base[96];
+    struct sbuf b;
+    int n = 0;
+    repo_url(base, sizeof(base));
+    sb_init(&b, out, max);
+    sb_str(&b, base);
+    while (base[n]) n++;
+    if (n > 0 && base[n - 1] != '/') sb_ch(&b, '/');
+    for (int i = 0; file[i] && i < 90; i++)
+        sb_ch(&b, file[i] == '\\' ? '/' : file[i]);
+}
+
+static void add_size_line(const char *label, int bytes) {
+    char line[COLS];
+    struct sbuf b;
+    sb_init(&b, line, sizeof(line));
+    sb_str(&b, label);
+    sb_size(&b, bytes);
+    add_line(line);
+}
+
+static void fetch_begin_transfer(void) {
+    /* Fall back to <name>/<name>.spx when the manifest has no file path. */
+    char file[96];
+    struct sbuf fb;
+    sb_init(&fb, file, sizeof(file));
+    sb_str(&fb, fetch_name);
+    sb_str(&fb, "/");
+    sb_str(&fb, fetch_name);
+    sb_str(&fb, ".spx");
+
+    char real[256];
+    build_pkg_url(fetch_file[0] ? fetch_file : file, real, sizeof(real));
+
+    fetch_received = 0;
+    fetch_total = fetch_size;
+    fetch_status = 0;
+    fetch_final = -1;
+    fetch_shown = 0;
+
+    if (net_dl_begin(real, pkg_buf, PKG_BUF_SIZE - 1) < 0) {
+        char msg[COLS];
+        struct sbuf b;
+        sb_init(&b, msg, sizeof(msg));
+        sb_str(&b, "Could not start ");
+        sb_str(&b, real);
+        add_line(msg);
+        add_line("Check the network and try again.");
+        fetch_state = FETCH_IDLE;
+        return;
+    }
+    fetch_state = FETCH_TRANSFER;
+}
+
 static void cmd_fetch(const char *name) {
     if (!name || !*name) {
         add_line("Usage: fetch <name>");
         return;
     }
     while (*name == ' ') name++;
+    if (fetch_state != FETCH_IDLE) {
+        add_line("A download is already running.");
+        return;
+    }
     if (!net_available()) {
         add_line("Network not available.");
         return;
     }
-    if (!repo_loaded && fetch_manifest() <= 0) {
-        add_line("Could not read repo.json.");
-        return;
+    if (!repo_loaded) {
+        add_line("Reading the package index...");
+        if (fetch_manifest() <= 0) {
+            add_line("Could not reach the repository.");
+            add_line("Check the network, then try again.");
+            return;
+        }
     }
     struct repo_entry *e = find_repo_pkg(name);
     if (!e) {
-        add_line("No such package in the repo.");
-        add_line("Run 'repo-list' to see what is available.");
+        add_line("No such package in the repository.");
+        add_line("Run 'search' to see what is available.");
         return;
     }
-    if (repo_resolve() < 0) {
-        add_line("Failed to resolve the repo hostname.");
+    if (!e->name[0]) {
+        add_line("The repository entry has no name.");
         return;
     }
 
-    char path[128];
-    int pi = 0;
-    if (repo_prefix[0]) {
-        path[pi++] = '/';
-        for (int i = 0; repo_prefix[i] && pi < 60; i++) path[pi++] = repo_prefix[i];
+    int n = 0;
+    while (e->name[n] && n < (int)sizeof(fetch_name) - 1) {
+        fetch_name[n] = e->name[n];
+        n++;
     }
-    path[pi++] = '/';
-    for (int i = 0; e->file[i] && pi < 120; i++) {
-        path[pi++] = (e->file[i] == '\\') ? '/' : e->file[i];
+    fetch_name[n] = '\0';
+    n = 0;
+    while (e->version[n] && n < (int)sizeof(fetch_version) - 1) {
+        fetch_version[n] = e->version[n];
+        n++;
     }
-    path[pi] = '\0';
+    fetch_version[n] = '\0';
+    n = 0;
+    while (e->desc[n] && n < (int)sizeof(fetch_desc) - 1) {
+        fetch_desc[n] = e->desc[n];
+        n++;
+    }
+    fetch_desc[n] = '\0';
+    n = 0;
+    while (e->file[n] && n < (int)sizeof(fetch_file) - 1) {
+        fetch_file[n] = e->file[n];
+        n++;
+    }
+    fetch_file[n] = '\0';
+    fetch_size = e->size;
 
-    char msg[64];
+    char line[COLS];
     struct sbuf b;
-    sb_init(&b, msg, sizeof(msg));
-    sb_str(&b, "Downloading ");
-    sb_str(&b, e->name);
-    add_line(msg);
+    sb_init(&b, line, sizeof(line));
+    sb_str(&b, "Package: ");
+    sb_str(&b, fetch_name);
+    if (fetch_version[0]) { sb_str(&b, " "); sb_str(&b, fetch_version); }
+    add_line(line);
+    if (fetch_desc[0]) {
+        sb_init(&b, line, sizeof(line));
+        sb_str(&b, "  ");
+        sb_str(&b, fetch_desc);
+        add_line(line);
+    }
+    add_size_line("Size:    ", fetch_size);
+    add_line("Download and install it? [y/N]");
+    fetch_state = FETCH_CONFIRM;
+}
 
-    int n = net_http_get(repo_ip, repo_port, repo_host_str, path,
-                         pkg_buf, PKG_BUF_SIZE - 1);
-    if (n <= 0) {
-        add_line("Download failed.");
-        add_line("Check that the repo serves this file.");
-        return;
-    }
-    if (n >= PKG_BUF_SIZE - 1) {
-        add_line("Download too large (1 MiB limit).");
-        return;
-    }
-    install_buffer((uint32_t)n, e->name);
+/* Blocking variant used by `upgrade`, which installs several packages in a
+ * row and has no dialog of its own. */
+static int download_sync(struct repo_entry *e) {
+    char url[256];
+    build_pkg_url(e->file, url, sizeof(url));
+    if (net_dl_begin(url, pkg_buf, PKG_BUF_SIZE - 1) < 0) return -1;
+    struct net_dl_progress p;
+    int rv;
+    do { rv = net_dl_step(&p); } while (rv == 0);
+    if (rv < 0) { net_dl_abort(); return -1; }
+    return p.received;
 }
 
 static void cmd_upgrade(const char *arg) {
@@ -759,7 +928,18 @@ static void cmd_upgrade(const char *arg) {
         struct repo_entry *e = &repo_pkgs[i];
         if (spx_find_slot(e->name) < 0) continue;
         if (e->slot >= 0 && spx_get_exports(e->slot) == 0) continue;
-        cmd_fetch(e->name);
+        char msg[64];
+        struct sbuf b;
+        sb_init(&b, msg, sizeof(msg));
+        sb_str(&b, "Upgrading ");
+        sb_str(&b, e->name);
+        add_line(msg);
+        int n = download_sync(e);
+        if (n <= 0) {
+            add_line("  download failed, skipped.");
+            continue;
+        }
+        install_buffer((uint32_t)n, e->name);
         done++;
     }
     if (!done) add_line("Nothing installed from the repo to upgrade.");
@@ -883,6 +1063,11 @@ static void cmd_execute(const char *cmd) {
     }
 }
 
+void pkg_get_size(int *w, int *h) {
+    if (w) *w = 820;
+    if (h) *h = 560;
+}
+
 void pkg_init(void) {
     clear_screen();
     print_help();
@@ -891,30 +1076,230 @@ void pkg_init(void) {
     dirty = true;
 }
 
+/* ------------------------------------------------------------------ */
+/* Download dialog                                                     */
+/* ------------------------------------------------------------------ */
+
+#define DL_PANEL  0xFF141824
+#define DL_EDGE   0xFF46A8E8
+#define DL_TEXT   0xFFE6EAF2
+#define DL_DIM    0xFF8A93A6
+#define DL_TRACK  0xFF0A0E16
+#define DL_FILL   0xFF33C48A
+#define DL_GOLD   0xFFE8C063
+
+static void draw_fetch_box(int x, int y, int w, int h) {
+    int bw = 470;
+    if (bw > w - 12) bw = w - 12;
+    int bh = 160;
+    if (bh > h - 12) bh = h - 12;
+    int bx = x + (w - bw) / 2;
+    int by = y + h - bh - 8;
+
+    graphics_fill_rect(bx, by, bw, bh, DL_PANEL);
+    graphics_draw_rect(bx, by, bw, bh, DL_EDGE);
+    graphics_fill_rect(bx + 1, by + 1, bw - 2, 24, 0xFF1B2330);
+
+    char line[COLS];
+    struct sbuf b;
+    sb_init(&b, line, sizeof(line));
+    sb_str(&b, "SOLPKG  ");
+    sb_str(&b, fetch_name);
+    if (fetch_version[0]) { sb_str(&b, " "); sb_str(&b, fetch_version); }
+    graphics_draw_string(bx + 10, by + 5, line, DL_GOLD);
+
+    int tx = bx + 14;
+    int ty = by + 32;
+    if (fetch_desc[0])
+        graphics_draw_string(tx, ty, fetch_desc, DL_DIM);
+
+    if (fetch_state == FETCH_CONFIRM) {
+        char size_line[COLS];
+        struct sbuf s;
+        sb_init(&s, size_line, sizeof(size_line));
+        sb_str(&s, "Size  ");
+        sb_size(&s, fetch_size);
+        graphics_draw_string(tx, by + 54, size_line, DL_TEXT);
+        graphics_draw_string(tx, by + 74, "This package will be installed and added to the desktop.", DL_DIM);
+        graphics_draw_string(tx, by + 112, "Proceed?", DL_TEXT);
+        graphics_draw_string(tx + 76, by + 112, "[Y] yes", DL_FILL);
+        graphics_draw_string(tx + 148, by + 112, "[N] no", 0xFFD1594F);
+        return;
+    }
+
+    /* Transfer: bytes so far, a bar and a percentage. */
+    int total = fetch_total > 0 ? fetch_total : fetch_size;
+    int shown = fetch_shown;
+    int pct = 0;
+    if (total > 0) {
+        if (shown > total) shown = total;
+        pct = shown * 100 / total;
+    } else if (fetch_final >= 0) {
+        pct = 100;
+    }
+
+    char size_line[COLS];
+    struct sbuf s;
+    sb_init(&s, size_line, sizeof(size_line));
+    sb_str(&s, "Downloaded ");
+    sb_size(&s, shown);
+    if (total > 0) {
+        sb_str(&s, " of ");
+        sb_size(&s, total);
+    }
+    graphics_draw_string(tx, by + 52, size_line, DL_DIM);
+
+    int bar_x = tx;
+    int bar_y = by + 72;
+    int bar_w = bw - 28;
+    int bar_h = 18;
+    graphics_fill_rect(bar_x, bar_y, bar_w, bar_h, DL_TRACK);
+    graphics_draw_rect(bar_x, bar_y, bar_w, bar_h, 0xFF2A3346);
+
+    if (total > 0) {
+        int inner = (bar_w - 4) * pct / 100;
+        if (inner > 0)
+            graphics_fill_rect(bar_x + 2, bar_y + 2, inner, bar_h - 4, DL_FILL);
+    } else {
+        /* Unknown length: a block sweeping across, like an install spinner. */
+        int block = (bar_w - 4) / 3;
+        int span = (bar_w - 4) - block;
+        int pos = span > 0 ? (fetch_phase * 12) % (span * 2) : 0;
+        if (pos > span) pos = span * 2 - pos;
+        graphics_fill_rect(bar_x + 2 + pos, bar_y + 2, block, bar_h - 4,
+                           0xFF2E7FBF);
+    }
+
+    if (total > 0) {
+        char pct_line[8];
+        struct sbuf q;
+        sb_init(&q, pct_line, sizeof(pct_line));
+        sb_num(&q, (uint32_t)pct);
+        sb_str(&q, "%");
+        graphics_draw_string(bar_x + bar_w - (int)q.len * 8 - 4,
+                             bar_y + bar_h + 4, pct_line, DL_TEXT);
+    }
+
+    if (fetch_final >= 0) {
+        graphics_draw_string(tx, by + 118, "Installing...", DL_FILL);
+    } else {
+        graphics_draw_string(tx, by + 118, "Esc cancels the download", DL_DIM);
+    }
+}
+
+/* Called from the window tick. Returns non-zero when it changed something
+ * and the desktop should repaint the client area. */
+int pkg_tick(void) {
+    if (fetch_state != FETCH_TRANSFER) return 0;
+    fetch_phase++;
+
+    if (fetch_final < 0) {
+        struct net_dl_progress p;
+        int rv = net_dl_step(&p);
+        if (rv < 0) {
+            net_dl_abort();
+            fetch_state = FETCH_IDLE;
+            add_line("");
+            add_line("Download failed. Nothing was installed.");
+            if (fetch_status >= 400) {
+                char line[COLS];
+                struct sbuf b;
+                sb_init(&b, line, sizeof(line));
+                sb_str(&b, "The server answered HTTP ");
+                sb_num(&b, (uint32_t)fetch_status);
+                sb_str(&b, ".");
+                add_line(line);
+            }
+            dirty = true;
+            return 1;
+        }
+        fetch_status = p.status;
+        fetch_received = p.received;
+        if (p.total >= 0) fetch_total = p.total;
+        if (rv == 1) {
+            fetch_final = p.received;
+            fetch_received = p.received;
+            if (fetch_total < fetch_received) fetch_total = fetch_received;
+        }
+    }
+
+    /* Ease the bar toward the real byte count so a fast download still
+     * reads as progress instead of jumping straight to 100%. */
+    if (fetch_shown < fetch_received) {
+        int delta = (fetch_received - fetch_shown) / 2 + 64;
+        fetch_shown += delta;
+        if (fetch_shown > fetch_received) fetch_shown = fetch_received;
+    } else if (fetch_final >= 0) {
+        fetch_shown = fetch_received;
+    }
+
+    dirty = true;
+
+    if (fetch_final >= 0 && fetch_shown >= fetch_received) {
+        fetch_state = FETCH_IDLE;
+        add_line("");
+        install_buffer((uint32_t)fetch_final, fetch_name);
+        fetch_final = -1;
+    }
+    return 1;
+}
+
 void pkg_draw(int x, int y, int w, int h) {
-    if (!dirty) return;
+    /* Always paint: a full desktop repaint asks every window to redraw and
+     * clears the client area first, so skipping frames would leave a blank
+     * window. `dirty` only tracks whether the console changed. */
     dirty = false;
 
-    int rows = (h - 8) / LINE_H;
-    if (rows > line_count) rows = line_count;
+    int avail = h - 8;
+    if (fetch_state != FETCH_IDLE) avail = h - 176;
+    int rows = avail / LINE_H - 1;      /* one row is kept for the prompt */
+    if (rows < 1) rows = 1;
 
     graphics_fill_rect(x, y, w, h, 0xFF1E1E2E);
 
-    for (int r = 0; r < rows; r++) {
-        graphics_draw_string(x + 4, y + 4 + r * LINE_H, lines[r], 0xFF00FF00);
+    /* Always show the newest output: the buffer is a scrollback, so the
+     * visible window starts at the last `rows` lines instead of the top. */
+    int first = line_count > rows ? line_count - rows : 0;
+    int shown = line_count - first;
+    for (int r = 0; r < shown; r++) {
+        graphics_draw_string(x + 4, y + 4 + r * LINE_H, lines[first + r],
+                             0xFF00FF00);
     }
 
     char prompt_line[COLS];
     int bi = 0;
     const char *p = "solpk> ";
-    while (*p) prompt_line[bi++] = *p++;
-    for (int i = 0; i < line_pos; i++)
+    while (*p && bi < COLS - 1) prompt_line[bi++] = *p++;
+    for (int i = 0; i < line_pos && bi < COLS - 1; i++)
         prompt_line[bi++] = line_buf[i];
     prompt_line[bi] = '\0';
-    graphics_draw_string(x + 4, y + 4 + (line_count < rows ? line_count : rows) * LINE_H, prompt_line, 0xFF00FF00);
+    graphics_draw_string(x + 4, y + 4 + shown * LINE_H, prompt_line, 0xFF00FF00);
+
+    if (fetch_state != FETCH_IDLE) draw_fetch_box(x, y, w, h);
 }
 
 void pkg_handle_key(char key) {
+    if (fetch_state == FETCH_CONFIRM) {
+        if (key == 'y' || key == 'Y') {
+            fetch_begin_transfer();
+        } else {
+            add_line("Aborted. Nothing was installed.");
+            fetch_state = FETCH_IDLE;
+        }
+        dirty = true;
+        return;
+    }
+    if (fetch_state == FETCH_TRANSFER) {
+        if (key == 0x1b) {
+            net_dl_abort();
+            fetch_state = FETCH_IDLE;
+            fetch_final = -1;
+            add_line("Download cancelled.");
+        }
+        dirty = true;
+        return;
+    }
+
     if (key == '\n') {
         line_buf[line_pos] = '\0';
         cmd_execute(line_buf);

@@ -260,6 +260,20 @@ int net_http_get(const uint8_t *ip, uint16_t port,
     return SYS->net_http_get(ip, port, host, path, response, max_size);
 }
 
+int net_dl_begin(const char *url, uint8_t *buf, uint32_t max_size) {
+    if (!SYS->net_dl_begin) return -1;
+    return SYS->net_dl_begin(url, buf, max_size);
+}
+
+int net_dl_step(struct net_dl_progress *progress) {
+    if (!SYS->net_dl_step) return -1;
+    return SYS->net_dl_step(progress);
+}
+
+void net_dl_abort(void) {
+    if (SYS->net_dl_abort) SYS->net_dl_abort();
+}
+
 int gui_launch_app(int slot) {
     return SYS->gui_launch_app(slot);
 }
