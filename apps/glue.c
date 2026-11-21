@@ -1,4 +1,5 @@
 #include <solis/syscall.h>
+#include <solis/audio.h>
 #include <solis/spx.h>
 #include <solis/jit.h>
 #include <stdbool.h>
@@ -28,6 +29,12 @@ void graphics_draw_rect(int x, int y, int w, int h, uint32_t color) {
 }
 void graphics_draw_string(int x, int y, const char *text, uint32_t color) {
     SYS->draw_string(x, y, text, color);
+}
+int graphics_text_width(const char *text) {
+    if (SYS->text_width) return SYS->text_width(text);
+    int cols = 0;
+    for (const char *p = text; *p; p++) cols++;
+    return cols * 8;
 }
 void graphics_put_pixel(int x, int y, uint32_t color) {
     SYS->put_pixel(x, y, color);
@@ -128,6 +135,12 @@ int setup_edition(void) {
 bool setup_is_guest(void) {
     return SYS->setup_is_guest();
 }
+int setup_pending_edition(void) {
+    return SYS->setup_pending_edition();
+}
+int setup_request_edition(int edition) {
+    return SYS->setup_request_edition(edition);
+}
 
 void graphics_blit_rgb_scaled(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                               const uint32_t *src, uint32_t src_w,
@@ -171,6 +184,21 @@ int spx_list_installed(char names[][SPX_NAME_LEN], int max) {
     return SYS->spx_list_installed(names, max);
 }
 
+const struct app_exports *spx_get_exports(int slot) {
+    if (!SYS->spx_get_exports) return 0;
+    return SYS->spx_get_exports(slot);
+}
+
+int spx_slot_for_base(uint32_t base) {
+    if (!SYS->spx_slot_for_base) return -1;
+    return SYS->spx_slot_for_base(base);
+}
+
+int gui_app_window(int slot) {
+    if (!SYS->gui_app_window) return -1;
+    return SYS->gui_app_window(slot);
+}
+
 int gui_get_theme(void) {
     return SYS->gui_get_theme();
 }
@@ -212,6 +240,20 @@ void net_get_gateway(uint8_t *ip) {
 void net_get_dns(uint8_t *ip) {
     SYS->net_get_dns(ip);
 }
+int net_https_get(const uint8_t *ip, uint16_t port,
+                  const char *host, const char *path,
+                  uint8_t *response, uint32_t max_size) {
+    return SYS->net_https_get(ip, port, host, path, response, max_size);
+}
+
+int audio_available(void) {
+    return SYS->audio_available ? SYS->audio_available() != 0 : 0;
+}
+
+int audio_play_tone(uint32_t hz, uint32_t ms) {
+    return SYS->audio_play_tone ? SYS->audio_play_tone(hz, ms) : 0;
+}
+
 int net_http_get(const uint8_t *ip, uint16_t port,
                  const char *host, const char *path,
                  uint8_t *response, uint32_t max_size) {

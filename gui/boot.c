@@ -151,7 +151,8 @@ static void boot_draw(void) {
                        (uint32_t)(panel_w - 36), 2, C_BOOT_BLUE);
 
     graphics_draw_string((uint32_t)(px + 24), (uint32_t)(py + 24),
-                         "DAYBREAK  /  SYSTEM INITIALIZATION", C_BOOT_DIM);
+                         SOLIS_NAME " " SOLIS_VERSION
+                         "  /  SYSTEM INITIALIZATION", C_BOOT_DIM);
     graphics_draw_string((uint32_t)(px + 24), (uint32_t)(py + 42),
                          boot_line_count ? "Bringing up the Solis runtime"
                                          : "Starting...",
@@ -228,7 +229,8 @@ void boot_report_step(const char *message) {
 
 void boot_report_finish(void) {
     if (!boot_enabled) return;
-    boot_report_step("Desktop session ready - welcome to Solis 2.0");
+    boot_report_step("Desktop session ready - welcome to "
+                     SOLIS_NAME " " SOLIS_VERSION);
     uint32_t start = timer_get_ticks();
     while ((uint32_t)(timer_get_ticks() - start) < 180) {
         __asm__ volatile("hlt");

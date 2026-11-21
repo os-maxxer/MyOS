@@ -14,6 +14,7 @@
 #define IP_PROTO_UDP 17
 
 #define HTTP_PORT 80
+#define HTTPS_PORT 443
 
 int  net_init(void);
 int  net_configure_dhcp(void);
@@ -31,9 +32,32 @@ int net_arp_resolve(const uint8_t *target_ip, uint8_t *target_mac);
 int net_ping(const uint8_t *ip, uint32_t timeout_ms);
 int net_tcp_syn_test(const uint8_t *ip, uint16_t port, uint32_t timeout_ms);
 
+/* Minimal TCP stream used by the kernel TLS transport. */
+struct net_tcp_conn {
+    uint8_t ip[4];
+    uint16_t port;
+    uint16_t local_port;
+    uint32_t seq;
+    uint32_t ack;
+    int fin;
+    uint8_t rx_buf[2048];
+    int rx_len;
+    int rx_off;
+};
+
+int net_tcp_open(struct net_tcp_conn *conn, const uint8_t *ip,
+                 uint16_t port, uint32_t timeout_ticks);
+int net_tcp_write(struct net_tcp_conn *conn, const void *data, int len);
+int net_tcp_read(struct net_tcp_conn *conn, void *data, int max_size,
+                 uint32_t timeout_ticks);
+
 int net_http_get(const uint8_t *ip, uint16_t port,
                  const char *host, const char *path,
                  uint8_t *response, uint32_t max_size);
+
+int net_https_get(const uint8_t *ip, uint16_t port,
+                  const char *host, const char *path,
+                  uint8_t *response, uint32_t max_size);
 
 int net_dns_resolve(const char *hostname, uint8_t *ip_out);
 

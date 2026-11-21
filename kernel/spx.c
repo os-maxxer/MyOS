@@ -14,6 +14,7 @@
 #include <solis/dbg.h>
 #include <solis/rtc.h>
 #include <solis/jit.h>
+#include <solis/audio.h>
 #include <stddef.h>
 
 extern const uint8_t doom_wad_start[];
@@ -158,6 +159,9 @@ void spx_init_syscalls(void) {
     sys_table.blit_rgb_scaled = graphics_blit_rgb_scaled;
     sys_table.doom_wad = doom_wad_start;
     sys_table.doom_wad_size = (uint32_t)(doom_wad_end - doom_wad_start);
+    sys_table.setup_pending_edition = setup_pending_edition;
+    sys_table.setup_request_edition = setup_request_edition;
+    sys_table.net_https_get   = net_https_get;
     sys_table.gui_get_theme  = gui_get_theme;
     sys_table.gui_set_bg_color = gui_set_bg_color;
     sys_table.gui_set_theme  = gui_set_theme;
@@ -196,6 +200,12 @@ void spx_init_syscalls(void) {
     sys_table.gui_save_dialog       = gui_save_dialog;
     sys_table.gui_open_dialog       = gui_open_dialog;
     sys_table.gui_open_with         = gui_open_with;
+    sys_table.audio_available       = audio_available;
+    sys_table.audio_play_tone       = audio_play_tone;
+    sys_table.text_width            = graphics_text_width;
+    sys_table.spx_get_exports       = spx_get_exports;
+    sys_table.spx_slot_for_base     = spx_slot_for_base;
+    sys_table.gui_app_window        = gui_app_window;
 
     struct syscall_table *target = (struct syscall_table *)SYSCALL_TABLE_ADDR;
     *target = sys_table;
@@ -284,20 +294,64 @@ static int spx_find_free_slot(void) {
     return -1;
 }
 
+int spx_slot_for_base(uint32_t base) {
+    if (base < SPX_SLOT_BASE) return -1;
+    uint32_t off = base - SPX_SLOT_BASE;
+    if (off % SPX_SLOT_SIZE) return -1;
+    uint32_t slot = off / SPX_SLOT_SIZE;
+    if (slot >= SPX_MAX_APPS) return -1;
+    return (int)slot;
+}
+
+static int spx_names_equal(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+/* Read the exported name out of a not-yet-loaded package image. The struct
+ * holds linked addresses, so translate the name pointer back into a file
+ * offset relative to the image's declared base. */
+static const char *spx_image_name(const struct spx_header *hdr,
+                                  const uint8_t *data, uint32_t size) {
+    uint32_t hdr_size = sizeof(struct spx_header);
+    if (hdr->exports_offset + sizeof(struct app_exports) > hdr->code_size ||
+        hdr_size + hdr->exports_offset + sizeof(struct app_exports) > size)
+        return 0;
+    if (hdr->load_base == 0) return 0;
+    const struct app_exports *exp =
+        (const struct app_exports *)(data + hdr_size + hdr->exports_offset);
+    uintptr_t name_addr = (uintptr_t)exp->name;
+    if (name_addr < hdr->load_base) return 0;
+    uintptr_t off = name_addr - hdr->load_base;
+    if (off >= hdr->code_size) return 0;
+    const char *name = (const char *)(data + hdr_size + off);
+    if ((uint32_t)(hdr_size + off) >= size) return 0;
+    for (uint32_t i = 0; i < SPX_NAME_LEN * 2; i++) {
+        if (hdr_size + off + i >= size) return 0;
+        if (name[i] == '\0') return name;
+    }
+    return 0;
+}
+
 static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
-    if (slot < 0 || slot >= SPX_MAX_APPS) return -1;
-    if (size < sizeof(struct spx_header)) return -1;
+    if (slot < 0 || slot >= SPX_MAX_APPS) return SPX_ERR_BAD;
+    if (size < sizeof(struct spx_header)) return SPX_ERR_BAD;
 
     const struct spx_header *hdr = (const struct spx_header *)data;
     if (hdr->magic != SPX_MAGIC ||
-        (hdr->version != 1 && hdr->version != SPX_VERSION)) return -1;
+        (hdr->version != 1 && hdr->version != SPX_VERSION)) return SPX_ERR_BAD;
 
     uint8_t *load_addr = (uint8_t *)(uintptr_t)(SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)slot);
     uint32_t code_size = hdr->code_size;
     uint32_t bss_size  = hdr->bss_size;
     uint32_t hdr_size  = sizeof(struct spx_header);
 
-    if (hdr_size + code_size > size) return -1;
+    if (hdr_size + code_size > size) return SPX_ERR_BAD;
+    /* Reject rather than silently truncate: a package that does not fit
+     * would run with a clipped .text and fault far from the real cause. */
+    if (code_size > SPX_SLOT_SIZE || bss_size > SPX_SLOT_SIZE - code_size)
+        return SPX_ERR_BAD;
 
     for (uint32_t j = 0; j < code_size && j < SPX_SLOT_SIZE; j++)
         load_addr[j] = data[hdr_size + j];
@@ -306,7 +360,7 @@ static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
         load_addr[code_size + j] = 0;
 
     uint32_t exp_off = hdr->exports_offset;
-    if (exp_off + sizeof(struct app_exports) > SPX_SLOT_SIZE) return -1;
+    if (exp_off + sizeof(struct app_exports) > SPX_SLOT_SIZE) return SPX_ERR_BAD;
 
     const struct app_exports *exp = (const struct app_exports *)(load_addr + exp_off);
 
@@ -329,8 +383,30 @@ static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
 }
 
 int spx_install(const uint8_t *data, uint32_t size) {
-    int slot = spx_find_free_slot();
-    if (slot < 0) return -1;
+    if (!data || size < sizeof(struct spx_header)) return SPX_ERR_BAD;
+    const struct spx_header *hdr = (const struct spx_header *)data;
+    if (hdr->magic != SPX_MAGIC ||
+        (hdr->version != 1 && hdr->version != SPX_VERSION)) return SPX_ERR_BAD;
+
+    int slot = -1;
+    if (hdr->version >= 3 && hdr->load_base) {
+        /* Pinned package: the code was linked for one base, so it can only
+         * run in that slot. Upgrading the app already there is allowed;
+         * evicting a different app is not, because that would silently
+         * replace whatever the user was running. */
+        slot = spx_slot_for_base(hdr->load_base);
+        if (slot < 0) return SPX_ERR_BASE;
+        if (app_slots[slot].loaded) {
+            const char *owner = app_slots[slot].exports.name;
+            const char *image_name = spx_image_name(hdr, data, size);
+            if (!spx_names_equal(owner, hdr->name) &&
+                !spx_names_equal(owner, image_name))
+                return SPX_ERR_BUSY;
+        }
+    } else {
+        slot = spx_find_free_slot();
+        if (slot < 0) return SPX_ERR_BUSY;
+    }
     return spx_load_to_slot(slot, data, size);
 }
 
@@ -344,6 +420,11 @@ int spx_uninstall(const char *name) {
             while (*a && *b && *a == *b) { a++; b++; }
             if (*a != *b) match = 0;
             if (match) {
+                /* Clear the header too, so a stale name in the slot image
+                 * cannot be mistaken for a live app after removal. */
+                uint8_t *addr = (uint8_t *)(uintptr_t)(SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)i);
+                for (uint32_t k = 0; k < sizeof(struct app_exports) && k < SPX_SLOT_SIZE; k++)
+                    addr[k] = 0;
                 app_slots[i].loaded = false;
                 app_slots[i].exports.name = 0;
                 app_slots[i].exports.init = 0;

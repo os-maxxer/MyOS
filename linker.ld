@@ -43,18 +43,19 @@ SECTIONS {
         __bss_end = .;
     }
 
-    /* Twelve SPX slots occupy 16-40 MiB. Keep the GUI staging buffer beyond
-     * them so loading the last app cannot overwrite the frame stage. */
-    .frame_stage 0x03000000 (NOLOAD) : {
-        __frame_stage_start = .;
-        *(.frame_stage)
-        __frame_stage_end = .;
-    }
-
-    .user_image_stage 0x028B0000 (NOLOAD) : {
+    /* Thirteen SPX slots occupy 16-55 MiB (0x01000000-0x03700000). Keep the
+     * staging buffers beyond them so loading the last app cannot overwrite
+     * either stage; both still fit below the Doom heap at 0x04000000. */
+    .user_image_stage 0x03700000 (NOLOAD) : {
         __user_image_stage_start = .;
         *(.user_image_stage)
         __user_image_stage_end = .;
+    }
+
+    .frame_stage 0x03800000 (NOLOAD) : {
+        __frame_stage_start = .;
+        *(.frame_stage)
+        __frame_stage_end = .;
     }
 
     __kernel_end = .;

@@ -11,6 +11,7 @@
 #define SETUP_MAGIC 0x53455450u   /* "SETP" */
 #define SETUP_VERSION 2
 #define SETUP_V1_SIZE 48
+#define SETUP_PENDING_PATH "settings/edition.next"
 
 struct setup_record {
     uint32_t magic;
@@ -105,6 +106,30 @@ static uint32_t setup_new_salt(void) {
     return salt ? salt : 0x51A7C0DEu;
 }
 
+static int setup_store_record(const struct setup_record *next) {
+    if (!next) return -1;
+    int fd = solfs_open(SETUP_PATH);
+    if (fd < 0) fd = solfs_create(SETUP_PATH);
+    if (fd < 0) return -1;
+    if (solfs_write(fd, (const uint8_t *)next, sizeof(*next)) !=
+        (int)sizeof(*next))
+        return -1;
+    return 0;
+}
+
+static int setup_pending_value(void) {
+    int fd = solfs_open(SETUP_PENDING_PATH);
+    if (fd < 0) return -1;
+    uint8_t value = 0;
+    if (solfs_read(fd, &value, 1) != 1) return -1;
+    if (!setup_edition_valid(value)) return -1;
+    return (int)value;
+}
+
+static void setup_clear_pending(void) {
+    solfs_delete(SETUP_PENDING_PATH);
+}
+
 void setup_init(void) {
     uint8_t *raw = (uint8_t *)&record;
     for (uint32_t i = 0; i < sizeof(record); i++) raw[i] = 0;
@@ -162,6 +187,27 @@ int setup_edition(void) {
     return setup_loaded ? record.edition : SETUP_EDITION_DEFAULT;
 }
 
+int setup_pending_edition(void) {
+    int pending = setup_pending_value();
+    return pending >= 0 ? pending : setup_edition();
+}
+
+int setup_request_edition(int edition) {
+    if (!setup_loaded || !setup_edition_valid(edition)) return -1;
+    if (edition == record.edition) {
+        setup_clear_pending();
+        return 0;
+    }
+
+    int fd = solfs_open(SETUP_PENDING_PATH);
+    if (fd < 0) fd = solfs_create(SETUP_PENDING_PATH);
+    if (fd < 0) return -1;
+    uint8_t value = (uint8_t)edition;
+    if (solfs_write(fd, &value, 1) != 1) return -1;
+    console_write("[SETUP] edition change queued for next start\n");
+    return 0;
+}
+
 bool setup_is_guest(void) {
     return setup_loaded && record.guest != 0;
 }
@@ -181,6 +227,9 @@ static int setup_write_account(const char *username, const char *password,
     if (!setup_theme_valid(theme)) return -1;
     if (timezone < 0 || timezone >= RTC_MAX_TIMEZONES) return -1;
     if (!setup_edition_valid(edition)) return -1;
+
+    /* A fresh install always wins over a change queued before the install. */
+    setup_clear_pending();
 
     if (!solfs_is_mounted()) {
         console_write("[SETUP] blank disk detected; formatting SOLFS\n");
@@ -212,13 +261,7 @@ static int setup_write_account(const char *username, const char *password,
     next.hash = guest ? 0 : setup_hash_password(password, next.salt);
     setup_copy(next.username, username, SETUP_USERNAME_MAX);
 
-    int fd = solfs_open(SETUP_PATH);
-    if (fd < 0) fd = solfs_create(SETUP_PATH);
-    if (fd < 0) {
-        console_write("[SETUP] could not create account record\n");
-        return SETUP_INSTALL_WRITE_ERROR;
-    }
-    if (solfs_write(fd, raw, sizeof(next)) != (int)sizeof(next)) {
+    if (setup_store_record(&next) != 0) {
         console_write("[SETUP] could not write account record\n");
         return SETUP_INSTALL_WRITE_ERROR;
     }
@@ -244,6 +287,22 @@ int setup_install_guest(int theme, int timezone, int edition) {
 }
 
 void setup_apply_edition(void) {
+    if (setup_loaded) {
+        int pending = setup_pending_value();
+        if (pending >= 0 && pending != record.edition) {
+            int previous = record.edition;
+            record.edition = (uint8_t)pending;
+            if (setup_store_record(&record) != 0) {
+                record.edition = (uint8_t)previous;
+                console_write("[SETUP] could not persist edition change; "
+                              "keeping current edition\n");
+                return;
+            }
+            console_write("[SETUP] staged edition applied on boot\n");
+        }
+        setup_clear_pending();
+    }
+
     int edition = setup_edition();
 
     /* The edition is a runtime contract, not just a label: leaving apps in
@@ -258,6 +317,7 @@ void setup_apply_edition(void) {
         spx_uninstall("Tetris");
         spx_uninstall("Blocks");
         spx_uninstall("Calculator");
+        spx_uninstall("Browser");
     }
 
     /* Remove installer scratch records. Extra is allowed to be the cleanest
@@ -277,10 +337,7 @@ int setup_set_theme(int theme) {
     if (!setup_loaded || !setup_theme_valid(theme)) return -1;
     struct setup_record next = record;
     next.theme = (uint8_t)theme;
-    int fd = solfs_open(SETUP_PATH);
-    if (fd < 0) return -1;
-    if (solfs_write(fd, (const uint8_t *)&next, sizeof(next)) != (int)sizeof(next))
-        return -1;
+    if (setup_store_record(&next) != 0) return -1;
     record = next;
     return 0;
 }
@@ -294,10 +351,7 @@ int setup_change_password(const char *password) {
     next.salt = setup_new_salt();
     next.hash = setup_hash_password(password, next.salt);
 
-    int fd = solfs_open(SETUP_PATH);
-    if (fd < 0) return -1;
-    if (solfs_write(fd, (const uint8_t *)&next, sizeof(next)) != (int)sizeof(next))
-        return -1;
+    if (setup_store_record(&next) != 0) return -1;
     record = next;
     console_write("[SETUP] account password updated\n");
     return 0;

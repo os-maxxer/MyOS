@@ -6,14 +6,15 @@
 #include <solis/multiboot2.h>
 #include <solis/ports.h>
 #include <solis/console.h>
+#include <solis/text.h>
 #include <stddef.h>
 
 static struct framebuffer_info framebuffer = {0};
 static uint8_t *framebuffer_data = 0;
 static uint32_t framebuffer_width = 0;
 static uint32_t framebuffer_height = 0;
-#define FRAME_STAGE_MAX_W 1280
-#define FRAME_STAGE_MAX_H 960
+#define FRAME_STAGE_MAX_W 1920
+#define FRAME_STAGE_MAX_H 1080
 static uint32_t frame_stage[FRAME_STAGE_MAX_W * FRAME_STAGE_MAX_H]
     __attribute__((section(".frame_stage")));
 static uint8_t *frame_target;
@@ -271,7 +272,9 @@ void graphics_draw_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height,
     graphics_fill_rect(x + width - 1, y, 1, height, color);
 }
 
-static const uint8_t font8x16[128][16] = {
+/* Shared with kernel/text.c so accented Latin letters can compose from the
+ * ASCII shapes instead of duplicating them. */
+const uint8_t font8x16[128][16] = {
     [' ']  = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
     ['!']  = {0x00,0x00,0x18,0x3C,0x3C,0x3C,0x18,0x18,0x18,0x00,0x18,0x18,0x00,0x00,0x00,0x00},
     ['"']  = {0x00,0x66,0x66,0x66,0x24,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
@@ -369,48 +372,102 @@ static const uint8_t font8x16[128][16] = {
     ['~']  = {0x00,0x00,0x00,0x00,0x00,0x00,0x30,0x49,0x06,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
 };
 
+int graphics_text_width(const char *text) {
+    return text_width(text);
+}
+
+/* One glyph cell. clip_on limits drawing to the current clip rectangle; the
+ * early-out checks in the caller already reject fully clipped cells, so this
+ * only has to skip individual pixels outside a partially visible cell. */
+static void draw_glyph_cell(uint32_t px, uint32_t py, const uint8_t *glyph,
+                            uint32_t color, int cols, bool fast) {
+    int bytes_per_row = cols / 8;
+    if (bytes_per_row < 1) bytes_per_row = 1;
+    for (uint32_t row = 0; row < 16; ++row) {
+        for (int byte = 0; byte < bytes_per_row; ++byte) {
+            uint8_t bits = glyph[row * bytes_per_row + byte];
+            if (!bits) continue;
+            for (int col = 0; col < 8; ++col) {
+                if (!(bits & (0x80 >> col))) continue;
+                uint32_t gx = px + (uint32_t)(byte * 8 + col);
+                uint32_t gy = py + row;
+                if (gx >= framebuffer_width || gy >= framebuffer_height) continue;
+                if (gx < clip_x0 || gy < clip_y0 || gx >= clip_x1 || gy >= clip_y1)
+                    continue;
+                if (fast) framebuffer_put32(gx, gy, color);
+                else framebuffer_set_pixel(gx, gy, color);
+            }
+        }
+    }
+}
+
 void graphics_draw_string(uint32_t x, uint32_t y, const char *text, uint32_t color) {
     if (!framebuffer.present) {
         return;
     }
     uint32_t px = x;
     uint32_t py = y;
+    uint32_t last_px = x;
+    bool have_last = false;
     bool fast = (framebuffer.bytes_per_pixel == 4);
-    for (const char *p = text; *p != '\0'; ++p) {
-        if (*p == '\n') {
+
+    int i = 0;
+    while (text[i]) {
+        uint32_t cp;
+        int used = text_decode(text + i, &cp);
+        if (used <= 0) break;
+        i += used;
+
+        if (cp == '\n') {
             py += 16;
             px = x;
+            have_last = false;
             continue;
         }
-        if (*p == '\r') {
+        if (cp == '\r') {
             px = x;
+            have_last = false;
             continue;
         }
-        if (px + 8 >= framebuffer_width || py + 16 >= framebuffer_height) {
-            break;
-        }
-        /* Stop once the glyph starts past the clip edge. Descenders are not
-         * an issue because the 16px cell fully contains every glyph. */
-        if (px >= clip_x1 || py >= clip_y1) {
-            break;
-        }
-        if (px + 8 <= clip_x0 || py + 16 <= clip_y0) {
-            px += 8;
+        if (cp == '\t') {
+            px += 8 * (4 - ((px / 8) & 3));
+            have_last = false;
             continue;
         }
-        unsigned char ch = (unsigned char)*p;
-        if (ch > 127) ch = '?';
-        for (uint32_t row = 0; row < 16; ++row) {
-            uint8_t bits = font8x16[ch][row];
-            if (!bits) continue;
-            for (uint32_t col = 0; col < 8; ++col) {
-                if (bits & (0x80 >> col)) {
-                    if (fast) framebuffer_put32(px + col, py + row, color);
-                    else framebuffer_set_pixel(px + col, py + row, color);
+
+        /* Combining marks paint over the previous cell instead of taking
+         * one, so decomposed input keeps the same advance as precomposed. */
+        if (cp >= 0x0300 && cp <= 0x036F) {
+            if (have_last) {
+                static const uint8_t marks[][3] = {
+                    {0x18,0x30,0x60}, {0x18,0x0C,0x06}, {0x42,0x24,0x18},
+                    {0x36,0x6C,0x00}, {0x24,0x24,0x00}, {0x18,0x24,0x18},
+                    {0x42,0x24,0x18}, {0x7E,0x00,0x00}, {0x42,0x3C,0x00},
+                    {0x00,0x18,0x18}, {0x36,0x6C,0x00}, {0x18,0x0C,0x00},
+                };
+                int idx = (int)(cp - 0x0300);
+                if (idx >= 0 && idx < (int)(sizeof(marks) / sizeof(marks[0]))) {
+                    uint8_t cell[16] = {0};
+                    cell[1] = marks[idx][0];
+                    cell[2] = marks[idx][1];
+                    cell[3] = marks[idx][2];
+                    draw_glyph_cell(last_px, py, cell, color, 8, fast);
                 }
             }
+            continue;
         }
-        px += 8;
+
+        int width = 8;
+        const uint8_t *glyph = text_glyph(cp, &width);
+        if (px >= framebuffer_width || py >= framebuffer_height) break;
+        /* Stop once the glyph starts past the clip edge. Descenders are not
+         * an issue because the 16px cell fully contains every glyph. */
+        if (px >= clip_x1 || py >= clip_y1) break;
+        if (px + (uint32_t)width > clip_x0 && py + 16 > clip_y0)
+            draw_glyph_cell(px, py, glyph, color, width, fast);
+        last_px = px;
+        have_last = true;
+        px += (uint32_t)width;
     }
 }
 
@@ -562,12 +619,41 @@ void graphics_blit_rgb_scaled(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
         volatile uint32_t *row =
             (volatile uint32_t *)(framebuffer_data + y * framebuffer.pitch) + x;
         uint32_t pitch_words = framebuffer.pitch / 4;
+        bool exact = (w == src_w && h == src_h);
         for (uint32_t r = 0; r < h; r++) {
             uint32_t sy = (uint32_t)((uint64_t)r * src_h / h);
             const uint32_t *src_row = src + sy * src_w;
-            for (uint32_t c = 0; c < w; c++) {
-                uint32_t sx = (uint32_t)((uint64_t)c * src_w / w);
-                row[c] = src_row[sx];
+            if (exact) {
+                for (uint32_t c = 0; c < w; c++) row[c] = src_row[c];
+            } else {
+                uint32_t sy1 = sy + 1 < src_h ? sy + 1 : sy;
+                uint32_t fy = (uint32_t)(((uint64_t)r * src_h * 256 / h) & 255);
+                const uint32_t *src_row2 = src + sy1 * src_w;
+                for (uint32_t c = 0; c < w; c++) {
+                    uint64_t fp = (uint64_t)c * src_w * 256 / w;
+                    uint32_t sx = (uint32_t)(fp >> 8);
+                    uint32_t sx1 = sx + 1 < src_w ? sx + 1 : sx;
+                    uint32_t fx = (uint32_t)(fp & 255);
+                    uint32_t p00 = src_row[sx], p10 = src_row[sx1];
+                    uint32_t p01 = src_row2[sx], p11 = src_row2[sx1];
+                    uint32_t a = ((p00 >> 24) * (256 - fx) + (p10 >> 24) * fx) >> 8;
+                    uint32_t rr = (((p00 >> 16) & 255) * (256 - fx) +
+                                  ((p10 >> 16) & 255) * fx) >> 8;
+                    uint32_t gg = (((p00 >> 8) & 255) * (256 - fx) +
+                                  ((p10 >> 8) & 255) * fx) >> 8;
+                    uint32_t bb = ((p00 & 255) * (256 - fx) + (p10 & 255) * fx) >> 8;
+                    uint32_t a2 = ((p01 >> 24) * (256 - fx) + (p11 >> 24) * fx) >> 8;
+                    uint32_t r2 = (((p01 >> 16) & 255) * (256 - fx) +
+                                  ((p11 >> 16) & 255) * fx) >> 8;
+                    uint32_t g2 = (((p01 >> 8) & 255) * (256 - fx) +
+                                   ((p11 >> 8) & 255) * fx) >> 8;
+                    uint32_t b2 = ((p01 & 255) * (256 - fx) + (p11 & 255) * fx) >> 8;
+                    a = (a * (256 - fy) + a2 * fy) >> 8;
+                    rr = (rr * (256 - fy) + r2 * fy) >> 8;
+                    gg = (gg * (256 - fy) + g2 * fy) >> 8;
+                    bb = (bb * (256 - fy) + b2 * fy) >> 8;
+                    row[c] = (a << 24) | (rr << 16) | (gg << 8) | bb;
+                }
             }
             pixel_writes += w;
             row += pitch_words;

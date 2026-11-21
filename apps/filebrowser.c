@@ -213,6 +213,11 @@ static int default_app_for_file(const char *name) {
         (name[len - 1] == 'c' || name[len - 1] == 'h')) return SPX_EDITOR;
     if (len >= 4 && name[len - 4] == '.' && name[len - 3] == 'l' &&
         name[len - 2] == 'u' && name[len - 1] == 'a') return SPX_EDITOR;
+    if ((len >= 5 && name[len - 5] == '.' && name[len - 4] == 'h' &&
+         name[len - 3] == 't' && name[len - 2] == 'm' && name[len - 1] == 'l') ||
+        (len >= 4 && name[len - 4] == '.' && name[len - 3] == 'h' &&
+         name[len - 2] == 't' && name[len - 1] == 'm'))
+        return SPX_BROWSER;
     return SPX_NOTEPAD;
 }
 
@@ -251,11 +256,12 @@ static void draw_context_menu(int x, int y, int w, int h) {
     if (context_submenu) {
         int sx = mx + mw, sy = my + row_h;
         if (sx + 116 > w) sx = mx - 116;
-        if (sy + row_h * 2 > h) sy = h - row_h * 2;
-        graphics_fill_rect(x + sx, y + sy, 116, row_h * 2, 0xFF171E4B);
-        graphics_draw_rect(x + sx, y + sy, 116, row_h * 2, 0xFF596DE8);
+        if (sy + row_h * 3 > h) sy = h - row_h * 3;
+        graphics_fill_rect(x + sx, y + sy, 116, row_h * 3, 0xFF171E4B);
+        graphics_draw_rect(x + sx, y + sy, 116, row_h * 3, 0xFF596DE8);
         graphics_draw_string(x + sx + 8, y + sy + 3, "Notes", 0xFFEAF3FF);
         graphics_draw_string(x + sx + 8, y + sy + row_h + 3, "Editor", 0xFFEAF3FF);
+        graphics_draw_string(x + sx + 8, y + sy + row_h * 2 + 3, "Browser", 0xFFEAF3FF);
     }
 }
 
@@ -460,12 +466,14 @@ void filebrowser_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse
         if (context_submenu) {
             int sx = mx + mw, sy = my + row_h;
             if (sx + 116 > w) sx = mx - 116;
-            if (sy + row_h * 2 > h) sy = h - row_h * 2;
-            if (rel_x >= sx && rel_x < sx + 116 && rel_y >= sy && rel_y < sy + row_h * 2) {
+            if (sy + row_h * 3 > h) sy = h - row_h * 3;
+            if (rel_x >= sx && rel_x < sx + 116 && rel_y >= sy && rel_y < sy + row_h * 3) {
                 int choice = (rel_y - sy) / row_h;
                 context_open = false;
                 context_submenu = false;
-                open_entry_in(context_entry, choice == 0 ? SPX_NOTEPAD : SPX_EDITOR);
+                open_entry_in(context_entry,
+                              choice == 0 ? SPX_NOTEPAD :
+                              (choice == 1 ? SPX_EDITOR : SPX_BROWSER));
                 return;
             }
         }

@@ -26,6 +26,7 @@
 #include <solis/usb.h>
 #include <solis/boot.h>
 #include <solis/doom.h>
+#include <solis/audio.h>
 
 extern char _binary_build_spx_terminal_spx_start[];
 extern char _binary_build_spx_terminal_spx_end[];
@@ -51,6 +52,10 @@ extern char _binary_build_spx_calculator_spx_start[];
 extern char _binary_build_spx_calculator_spx_end[];
 extern char _binary_build_spx_doom_spx_start[];
 extern char _binary_build_spx_doom_spx_end[];
+extern char _binary_build_spx_browser_spx_start[];
+extern char _binary_build_spx_ck3_spx_start[];
+extern char _binary_build_spx_browser_spx_end[];
+extern char _binary_build_spx_ck3_spx_end[];
 
 void __attribute__((noreturn)) kernel_panic(const char *message) {
     console_set_color(0x0F, 0x04);
@@ -147,6 +152,12 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
            {"doom.spx",
             (const uint8_t *)_binary_build_spx_doom_spx_start,
             (uint32_t)(_binary_build_spx_doom_spx_end - _binary_build_spx_doom_spx_start)},
+           {"browser.spx",
+            (const uint8_t *)_binary_build_spx_browser_spx_start,
+            (uint32_t)(_binary_build_spx_browser_spx_end - _binary_build_spx_browser_spx_start)},
+           {"ck3.spx",
+            (const uint8_t *)_binary_build_spx_ck3_spx_start,
+            (uint32_t)(_binary_build_spx_ck3_spx_end - _binary_build_spx_ck3_spx_start)},
     };
         spx_init(spx_apps, (int)(sizeof(spx_apps) / sizeof(spx_apps[0])));
     if (setup_is_installed()) setup_apply_edition();
@@ -155,6 +166,8 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
     keyboard_init();
     pointer_init();
     boot_report_step("Keyboard and pointer ready");
+
+    if (audio_init()) boot_report_step("AC'97 audio initialized");
 
     int network_device_ready = net_init();
     boot_report_step("Network device initialized");
@@ -215,6 +228,13 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
                     console_write_dec(fk);
                     console_write("\n");
                     gui_launch_app(fk - 1);
+                } else if (fk == 11) {
+                    /* Browser is slot 12, past the F1-F10 app range. */
+                    console_write("[TRACE] FKEY 11 Browser\n");
+                    gui_launch_app(SPX_BROWSER);
+                } else if (fk == 12) {
+                    console_write("[TRACE] FKEY 12 Settings\n");
+                    gui_launch_app(SPX_SETTINGS);
                 }
 
                 gui_tick();

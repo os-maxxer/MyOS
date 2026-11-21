@@ -3,10 +3,10 @@
 #include <solis/vfs.h>
 #include <solis/console.h>
 
-#define BMP_MAX_FILE_SIZE (3 * 1024 * 1024)
+#define BMP_MAX_FILE_SIZE (8 * 1024 * 1024)
 
-#define WALLPAPER_MAX_W 1280
-#define WALLPAPER_MAX_H 960
+#define WALLPAPER_MAX_W 1920
+#define WALLPAPER_MAX_H 1080
 
 static uint8_t  bmp_file_buf[BMP_MAX_FILE_SIZE]
     __attribute__((section(".gui_cache")));

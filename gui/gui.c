@@ -22,6 +22,7 @@
 #include <solis/ports.h>
 #include <solis/solfs.h>
 #include <solis/setup.h>
+#include <solis/net.h>
 #include <solis/brand.h>
 #include <stdbool.h>
 
@@ -151,6 +152,11 @@ static bool gui_app_allowed(int slot) {
     if (!spx_get_exports(slot)) return false;
     int edition = setup_edition();
     if (slot == SPX_DOOM) return edition == SETUP_EDITION_EXTRA;
+    if (slot == SPX_BROWSER) {
+        if (!net_available()) return false;
+        return edition == SETUP_EDITION_STANDARD ||
+               edition == SETUP_EDITION_EXTRA;
+    }
     if (edition == SETUP_EDITION_MINIMAL)
         return slot == SPX_TERMINAL || slot == SPX_NOTEPAD ||
                slot == SPX_SETTINGS || slot == SPX_FILEBROWSER ||
@@ -166,8 +172,8 @@ static const char *edition_badge(void) {
 
 /* The procedural desktop backdrops are expensive, so they (plus the desktop
  * icons) are rendered once into a cache and blitted on every redraw. */
-#define BG_CACHE_MAX_W 1280
-#define BG_CACHE_MAX_H 960
+#define BG_CACHE_MAX_W 1920
+#define BG_CACHE_MAX_H 1080
 static uint32_t bg_cache[BG_CACHE_MAX_W * BG_CACHE_MAX_H]
     __attribute__((section(".gui_cache")));
 static uint32_t bg_cache_w = 0;
@@ -285,7 +291,7 @@ static const struct {
     const char *name;
     int kind;
     uint32_t color;
-} app_icons[12] = {
+} app_icons[SPX_MAX_APPS] = {
     {"Terminal",      0, 0xFF5CB85C},
     {"Notes",         1, 0xFF4C7BD9},
     {"Paint",         2, 0xFFE0576B},
@@ -298,14 +304,18 @@ static const struct {
     {"Blocks",        9, 0xFF9BCF9E},
     {"Calculator",   10, 0xFF6C8CD5},
     {"Doom",         11, 0xFFB23A2E},
+    {"Browser",      12, 0xFF4A90E2},
+    {"CK3",          13, 0xFFC8A24A},
 };
 
-#define DESKTOP_ICON_COUNT 8
+#define DESKTOP_ICON_COUNT 10
 static const struct { int x; int y; } desktop_icon_positions[DESKTOP_ICON_COUNT] = {
-    {28, 60}, {116, 60}, {204, 60}, {292, 60},
-    {28, 160}, {116, 160}, {204, 160}, {292, 160},
+    {28, 60}, {116, 60}, {204, 60}, {292, 60}, {380, 60},
+    {28, 160}, {116, 160}, {204, 160}, {292, 160}, {380, 160},
 };
-static const int desktop_icon_slots[DESKTOP_ICON_COUNT] = {0, 1, 2, 3, 4, 7, 8, 11};
+static const int desktop_icon_slots[DESKTOP_ICON_COUNT] = {
+    0, 1, 2, 3, 4, 7, 8, SPX_DOOM, SPX_BROWSER, SPX_CK3
+};
 
 static void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
 
@@ -351,7 +361,7 @@ static void icon_circle(int x, int y, int size, int cx, int cy, int radius,
 }
 
 static void draw_app_glyph(int x, int y, int size, int slot) {
-    if (slot < 0 || slot >= 12) return;
+    if (slot < 0 || slot >= SPX_MAX_APPS) return;
     uint32_t fg = 0xFFFFFFFF;
     uint32_t detail = 0xFFE9F0FA;
     graphics_fill_rounded_rect(x + 1, y + 2, size, size, size / 5,
@@ -469,6 +479,24 @@ static void draw_app_glyph(int x, int y, int size, int slot) {
             icon_line(x, y, size, 18, 10, 24, 10, fg);
             icon_line(x, y, size, 18, 15, 24, 15, fg);
             icon_line(x, y, size, 18, 20, 24, 20, fg);
+            break;
+        case 12:
+            icon_circle(x, y, size, 16, 16, 10, fg, false);
+            icon_line(x, y, size, 6, 16, 26, 16, fg);
+            icon_line(x, y, size, 16, 6, 16, 26, fg);
+            icon_line(x, y, size, 9, 9, 23, 23, fg);
+            icon_line(x, y, size, 23, 9, 9, 23, fg);
+            break;
+        case 13:
+            /* a crown: three points over a band */
+            icon_line(x, y, size, 7, 20, 7, 10, fg);
+            icon_line(x, y, size, 7, 10, 12, 16, fg);
+            icon_line(x, y, size, 12, 16, 16, 8, fg);
+            icon_line(x, y, size, 16, 8, 20, 16, fg);
+            icon_line(x, y, size, 20, 16, 25, 10, fg);
+            icon_line(x, y, size, 25, 10, 25, 20, fg);
+            graphics_fill_rect(x + icon_coord(7, size), y + icon_coord(21, size),
+                               icon_coord(18, size), icon_coord(3, size), fg);
             break;
         default:
             break;
@@ -999,7 +1027,9 @@ static void draw_voxel_system_tile(void) {
     graphics_fill_rect(x + 10, y + 9, 7, 7, 0xFFE4B779);
     graphics_fill_rect(x + 21, y + 9, 7, 7, 0xFF91C9A4);
     graphics_fill_rect(x + 32, y + 9, 7, 7, 0xFFE3818D);
-    graphics_draw_string(x + 48, y + 6, "SOLIS  /  DAYBREAK TILE", 0xFFF2EDF5);
+    graphics_draw_string(x + 48, y + 6,
+                         SOLIS_NAME "  /  " SOLIS_RELEASE " TILE",
+                         0xFFF2EDF5);
 
     draw_voxel_badge(x + 16, y + 43, 7);
     graphics_draw_string(x + 96, y + 44, SOLIS_RELEASE_LINE, 0xFFFFFFFF);
@@ -1379,7 +1409,7 @@ static void gui_draw_task_button(const struct tb_layout *L, int idx, int x) {
     graphics_draw_rounded_rect(x, y, width, height, ITEM_RADIUS, border);
 
     int slot = w->app_id - 1;
-    if (slot >= 0 && slot < 12)
+    if (slot >= 0 && slot < SPX_MAX_APPS)
         draw_app_icon(x + 6, y + (height - 14) / 2, 14, slot);
 
     uint32_t text_color = w->minimized ? C_TEXT_DIM : C_TEXT;
@@ -1442,12 +1472,14 @@ static const struct menu_item menu_items[] = {
     {0, 4, "Files"},
     {0, 7, "Editor"},
     {0, 10, "Calculator"},
+    {0, 12, "Browser"},
     {2, 0, "Utilities"},
     {0, 5, "Task Manager"},
     {0, 6, "Package Manager"},
     {2, 0, "Games"},
     {0, 8, "Tetris"},
     {0, 9, "Solis Blocks"},
+    {0, 13, "Crusader Kings"},
     {0, 11, "Doom"},
     {2, 0, "Settings"},
     {0, 3, "Settings"},
@@ -1735,10 +1767,26 @@ int gui_launch_calculator(void) {
     return gui_alloc_window("Calculator", 11);
 }
 
+int gui_launch_browser(void) {
+    return gui_alloc_window("Browser", SPX_BROWSER + 1);
+}
+
+int gui_launch_ck3(void) {
+    return gui_alloc_window("Crusader Kings III", SPX_CK3 + 1);
+}
+
 int gui_launch_doom(void) {
     int idx = gui_alloc_window("Doom", SPX_DOOM + 1);
     if (idx >= 0) gui_enter_fullscreen(idx);
     return idx;
+}
+
+int gui_app_window(int slot) {
+    if (slot < 0 || slot >= SPX_MAX_APPS) return -1;
+    for (int i = 0; i < MAX_WINDOWS; i++)
+        if (windows[i].visible && windows[i].app_id == slot + 1)
+            return i;
+    return -1;
 }
 
 int gui_launch_app(int slot) {
@@ -1760,6 +1808,8 @@ int gui_launch_app(int slot) {
         case 9: return gui_launch_blocks();
         case 10: return gui_launch_calculator();
         case 11: return gui_launch_doom();
+        case 12: return gui_launch_browser();
+        case 13: return gui_launch_ck3();
         default: return -1;
     }
 }

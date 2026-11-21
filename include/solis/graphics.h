@@ -28,6 +28,8 @@ void graphics_blit_rgb_scaled(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
 void graphics_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color);
 void graphics_draw_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color);
 void graphics_draw_string(uint32_t x, uint32_t y, const char *text, uint32_t color);
+/* Width of a UTF-8 string in the built-in 8x16/16x16 text grid. */
+int graphics_text_width(const char *text);
 void graphics_draw_mouse_cursor(uint32_t x, uint32_t y, uint32_t color);
 void graphics_fill_rounded_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint32_t color);
 void graphics_draw_rounded_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t r, uint32_t color);

@@ -41,8 +41,13 @@ int  gui_launch_pkg(void);
 int  gui_launch_editor(void);
 int  gui_launch_tetris(void);
 int  gui_launch_blocks(void);
+int  gui_launch_browser(void);
 int  gui_launch_doom(void);
+int  gui_launch_ck3(void);
 int  gui_launch_app(int slot);
+/* Window index for an SPX slot, or -1 when the app is not open. SOLPKG
+ * uses this to refuse replacing a running app. */
+int  gui_app_window(int slot);
 
 /* Blocking modal save dialog. Opens centered over the desktop, lets the user
  * pick a directory and type a filename. On save returns 1 and fills out_path

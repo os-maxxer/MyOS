@@ -1,21 +1,133 @@
 {
     "name": "solis-packages",
     "description": "Official Solis OS package repository",
-    "version": 1,
+    "version": 2,
     "packages": [
         {
-            "name": "taskmanager",
-            "version": "1.0.0",
-            "description": "System monitor showing CPU, RAM, uptime and installed apps",
+            "name": "terminal",
+            "version": "1.1.0",
+            "description": "Helios shell with the Solis command set",
             "author": "Solis OS",
-            "file": "taskmanager.spx"
+            "file": "terminal/terminal.spx",
+            "legacy": "terminal.npx",
+            "slot": 0
+        },
+        {
+            "name": "notepad",
+            "version": "1.1.0",
+            "description": "Plain text notes with save and load",
+            "author": "Solis OS",
+            "file": "notepad/notepad.spx",
+            "legacy": "notepad.npx",
+            "slot": 1
+        },
+        {
+            "name": "paint",
+            "version": "1.1.0",
+            "description": "Small drawing app that saves PNG-free art",
+            "author": "Solis OS",
+            "file": "paint/paint.spx",
+            "legacy": "paint.npx",
+            "slot": 2
+        },
+        {
+            "name": "settings",
+            "version": "1.1.0",
+            "description": "Themes, wallpapers, sound and system info",
+            "author": "Solis OS",
+            "file": "settings/settings.spx",
+            "legacy": "settings.npx",
+            "slot": 3
+        },
+        {
+            "name": "filebrowser",
+            "version": "1.1.0",
+            "description": "Browse the SolFS disk and open files",
+            "author": "Solis OS",
+            "file": "filebrowser/filebrowser.spx",
+            "legacy": "filebrowser.npx",
+            "slot": 4
+        },
+        {
+            "name": "taskmanager",
+            "version": "1.1.0",
+            "description": "CPU, RAM, uptime and installed apps",
+            "author": "Solis OS",
+            "file": "taskmanager/taskmanager.spx",
+            "legacy": "taskmanager.npx",
+            "slot": 5
         },
         {
             "name": "solpkg",
-            "version": "1.0.0",
-            "description": "Solis Package Manager - install, purge, and search packages",
+            "version": "1.1.0",
+            "description": "This package manager - install, fetch, upgrade",
             "author": "Solis OS",
-            "file": "solpkg.spx"
+            "file": "solpkg/solpkg.spx",
+            "legacy": "solpkg.npx",
+            "slot": 6
+        },
+        {
+            "name": "editor",
+            "version": "1.1.0",
+            "description": "Syntax-highlighting editor for C, Lua, ASM, HTML",
+            "author": "Solis OS",
+            "file": "editor/editor.spx",
+            "legacy": "editor.npx",
+            "slot": 7
+        },
+        {
+            "name": "tetris",
+            "version": "1.1.0",
+            "description": "Tetris with hold, next and scoring",
+            "author": "Solis OS",
+            "file": "tetris/tetris.spx",
+            "legacy": "tetris.npx",
+            "slot": 8
+        },
+        {
+            "name": "blocks",
+            "version": "1.1.0",
+            "description": "Solis Blocks puzzle game",
+            "author": "Solis OS",
+            "file": "blocks/blocks.spx",
+            "legacy": "blocks.npx",
+            "slot": 9
+        },
+        {
+            "name": "calculator",
+            "version": "1.1.0",
+            "description": "Scientific calculator with memory",
+            "author": "Solis OS",
+            "file": "calculator/calculator.spx",
+            "legacy": "calculator.npx",
+            "slot": 10
+        },
+        {
+            "name": "doom",
+            "version": "1.1.0",
+            "description": "Doom shareware (Extra edition)",
+            "author": "Solis OS",
+            "file": "doom/doom.spx",
+            "legacy": "doom.npx",
+            "slot": 11
+        },
+        {
+            "name": "browser",
+            "version": "1.1.0",
+            "description": "Solis Browser - HTML, CSS, JS, images, UTF-8",
+            "author": "Solis OS",
+            "file": "browser/browser.spx",
+            "legacy": "browser.npx",
+            "slot": 12
+        },
+        {
+            "name": "ck3",
+            "version": "1.1.0",
+            "description": "Crusader Kings III - feudal grand strategy",
+            "author": "Solis OS",
+            "file": "ck3/ck3.spx",
+            "legacy": "ck3.npx",
+            "slot": 13
         }
     ]
 }

@@ -33,6 +33,12 @@ int setup_timezone(void);
 int setup_edition(void);
 bool setup_is_guest(void);
 
+/* Edition changes are staged so the running desktop is never unloaded from
+ * under an open window. The requested edition is written to a small pending
+ * record and applied by setup_apply_edition() on the next boot. */
+int setup_pending_edition(void);
+int setup_request_edition(int edition);
+
 /* Returns true when password matches the saved salted hash. */
 bool setup_authenticate(const char *password);
 
@@ -45,8 +51,9 @@ int setup_install(const char *username, const char *password,
  * chosen edition so the same app pruning and Doom availability rules apply. */
 int setup_install_guest(int theme, int timezone, int edition);
 
-/* Remove apps that are outside the selected edition and clear any temporary
- * installer state. Safe to call after setup_init() on every boot. */
+/* Apply a staged edition (if any), remove apps outside the selected edition,
+ * and clear temporary installer state. Safe to call after setup_init() on
+ * every boot. */
 void setup_apply_edition(void);
 
 /* 0 = no compatible disk, 1 = mounted Solis volume, 2 = blank disk that

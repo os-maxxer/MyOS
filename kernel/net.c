@@ -1,10 +1,12 @@
 #include <solis/net.h>
 #include <solis/net_device.h>
 #include <solis/rtl8139.h>
+#include <solis/pcnet.h>
 #include <solis/pci.h>
 #include <solis/timer.h>
 #include <solis/console.h>
 #include <solis/dbg.h>
+#include <solis/tls.h>
 
 #define HTONS(x) __builtin_bswap16(x)
 #define HTONL(x) __builtin_bswap32(x)
@@ -116,7 +118,7 @@ struct {
 struct http_url {
     char host[64];
     uint16_t port;
-    char path[128];
+    char path[256];
 };
 
 struct http_response {
@@ -321,9 +323,18 @@ static void ip_send(const uint8_t *dst_ip, uint8_t protocol,
     *out_len = total;
 }
 
+/* TCP writes are split into 1 KiB chunks and each chunk gets a checksum.  The
+ * old local buffer was only 512 bytes, so any TLS record or request larger
+ * than roughly 480 bytes overwrote the return address and panicked the kernel
+ * with a General Protection fault.  Keep the scratch buffer in static storage
+ * so it can cover the largest packet the send path accepts. */
+static uint8_t tcp_checksum_buf[PKT_BUF_SIZE];
+
 static uint16_t tcp_checksum(const uint8_t *src_ip, const uint8_t *dst_ip,
                               const struct tcp_hdr *tcp, int tcp_len) {
-    uint8_t buf[512];
+    if (tcp_len < 0 || tcp_len > (int)sizeof(tcp_checksum_buf) - 12)
+        return 0;
+    uint8_t *buf = tcp_checksum_buf;
     int pos = 0;
     for (int i = 0; i < 4; i++) buf[pos++] = src_ip[i];
     for (int i = 0; i < 4; i++) buf[pos++] = dst_ip[i];
@@ -685,6 +696,86 @@ struct udp_hdr {
     uint16_t len;
     uint16_t checksum;
 } __attribute__((packed));
+
+int net_tcp_open(struct net_tcp_conn *conn, const uint8_t *ip,
+                 uint16_t port, uint32_t timeout_ticks) {
+    if (!net_ready || !conn || !ip || port == 0) return -1;
+    for (int i = 0; i < 4; i++) conn->ip[i] = ip[i];
+    conn->port = port;
+    conn->local_port = http_src.port++;
+    if (http_src.port < 49152) http_src.port = 49152;
+    conn->seq = 0;
+    conn->ack = 0;
+    conn->fin = 0;
+    conn->rx_len = 0;
+    conn->rx_off = 0;
+    return tcp_connect(conn->ip, conn->port, conn->local_port,
+                       &conn->seq, &conn->ack, timeout_ticks);
+}
+
+int net_tcp_write(struct net_tcp_conn *conn, const void *data, int len) {
+    if (!conn || !data || len <= 0) return -1;
+    const uint8_t *bytes = (const uint8_t *)data;
+    int sent = 0;
+    while (sent < len) {
+        int chunk = len - sent;
+        if (chunk > 1024) chunk = 1024;
+        if (tcp_send_data(conn->ip, conn->port, conn->local_port,
+                          conn->seq, conn->ack, bytes + sent, chunk,
+                          TCP_FLAG_PSH) < 0)
+            return -1;
+        conn->seq += (uint32_t)chunk;
+        sent += chunk;
+    }
+    return sent;
+}
+
+int net_tcp_read(struct net_tcp_conn *conn, void *data, int max_size,
+                 uint32_t timeout_ticks) {
+    if (!conn || !data || max_size <= 0) return -1;
+
+    /* TLS asks for exact record-header and record-body lengths. Keep any
+     * bytes beyond the requested amount for the next call instead of
+     * dropping the rest of the TCP segment. */
+    if (conn->rx_off < conn->rx_len) {
+        int n = conn->rx_len - conn->rx_off;
+        if (n > max_size) n = max_size;
+        for (int i = 0; i < n; i++)
+            ((uint8_t *)data)[i] = conn->rx_buf[conn->rx_off + i];
+        conn->rx_off += n;
+        if (conn->rx_off == conn->rx_len) {
+            conn->rx_len = 0;
+            conn->rx_off = 0;
+        }
+        return n;
+    }
+
+    uint32_t deadline = timer_get_ticks() + timeout_ticks;
+    while (timer_get_ticks() < deadline) {
+        int fin = 0;
+        int n = tcp_recv_data(conn->ip, conn->port, conn->local_port,
+                              &conn->seq, &conn->ack, conn->rx_buf,
+                              (int)sizeof conn->rx_buf, 100, &fin);
+        if (fin) conn->fin = 1;
+        if (n < 0) return -1;
+        if (n > 0) {
+            conn->rx_len = n;
+            conn->rx_off = 0;
+            int copy = n;
+            if (copy > max_size) copy = max_size;
+            for (int i = 0; i < copy; i++)
+                ((uint8_t *)data)[i] = conn->rx_buf[i];
+            conn->rx_off = copy;
+            if (conn->rx_off == conn->rx_len) {
+                conn->rx_len = 0;
+                conn->rx_off = 0;
+            }
+            return copy;
+        }
+        if (conn->fin) return 0;
+    }
+    return -1;
+}
 
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67
@@ -1144,39 +1235,14 @@ int net_dns_resolve(const char *hostname, uint8_t *ip_out) {
     return -1;
 }
 
-int net_init(void) {
-    net_ready = 0;
-    mt7902_present = 0;
-    our_ip[0] = 0;
-    our_ip[1] = 0;
-    our_ip[2] = 0;
-    our_ip[3] = 0;
-
-    struct pci_device_info wifi_device;
-    mt7902_present = pci_find_device(0x14C3, 0x7902, &wifi_device);
-    if (mt7902_present) {
-        dbg_print("[WIFI] MediaTek MT7902 detected at PCI ");
-        dbg_print_dec(wifi_device.bus);
-        dbg_print(":");
-        dbg_print_dec(wifi_device.slot);
-        dbg_print(".");
-        dbg_print_dec(wifi_device.function);
-        dbg_print("; network scanning/association driver unavailable\n");
-    }
-
-    struct pci_device_info device;
-    if (!pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID, &device)) {
-        dbg_print("[NET] RTL8139 adapter not found; no network device is available\n");
-        return -1;
-    }
-
-    uint32_t bar = pci_get_bar(device.bus, device.slot,
-                               device.function, 0);
+static int net_init_rtl8139(const struct pci_device_info *device) {
+    uint32_t bar = pci_get_bar(device->bus, device->slot,
+                               device->function, 0);
     if ((bar & 1) == 0) {
         dbg_print("[NET] RTL8139 BAR0 is not an I/O-space BAR\n");
         return -1;
     }
-    if (!pci_enable_command_bits(&device, PCI_COMMAND_IO_SPACE |
+    if (!pci_enable_command_bits(device, PCI_COMMAND_IO_SPACE |
                                           PCI_COMMAND_BUS_MASTER)) {
         dbg_print("[NET] Could not enable RTL8139 PCI I/O and bus mastering\n");
         return -1;
@@ -1204,8 +1270,87 @@ int net_init(void) {
         dbg_print("[NET] Could not register the RTL8139 network device\n");
         return -1;
     }
-
     return 0;
+}
+
+static int net_init_pcnet(const struct pci_device_info *device) {
+    uint32_t bar = pci_get_bar(device->bus, device->slot,
+                               device->function, 0);
+    if ((bar & 1) == 0) {
+        dbg_print("[NET] PCnet BAR0 is not an I/O-space BAR\n");
+        return -1;
+    }
+    if (!pci_enable_command_bits(device, PCI_COMMAND_IO_SPACE |
+                                          PCI_COMMAND_BUS_MASTER)) {
+        dbg_print("[NET] Could not enable PCnet PCI I/O and bus mastering\n");
+        return -1;
+    }
+
+    uint16_t io_base = bar & 0xFFFC;
+    if (io_base == 0) {
+        dbg_print("[NET] PCnet BAR0 has an invalid I/O base\n");
+        return -1;
+    }
+
+    if (pcnet_init(io_base) != 0) {
+        dbg_print("[NET] PCnet initialization failed\n");
+        return -1;
+    }
+    struct net_device network_device = {
+        .name = "PCnet-FAST III",
+        .max_frame_size = PCNET_MAX_FRAME_SIZE,
+        .send_frame = pcnet_send,
+        .receive_frame = pcnet_recv,
+    };
+    pcnet_get_mac(network_device.mac);
+    if (!net_device_register(&network_device) ||
+        !net_device_get_mac(our_mac)) {
+        dbg_print("[NET] Could not register the PCnet network device\n");
+        return -1;
+    }
+    return 0;
+}
+
+int net_init(void) {
+    net_ready = 0;
+    mt7902_present = 0;
+    our_ip[0] = 0;
+    our_ip[1] = 0;
+    our_ip[2] = 0;
+    our_ip[3] = 0;
+
+    struct pci_device_info wifi_device;
+    mt7902_present = pci_find_device(0x14C3, 0x7902, &wifi_device);
+    if (mt7902_present) {
+        dbg_print("[WIFI] MediaTek MT7902 detected at PCI ");
+        dbg_print_dec(wifi_device.bus);
+        dbg_print(":");
+        dbg_print_dec(wifi_device.slot);
+        dbg_print(".");
+        dbg_print_dec(wifi_device.function);
+        dbg_print("; network scanning/association driver unavailable\n");
+    }
+
+    struct pci_device_info device;
+    if (pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID, &device) &&
+        net_init_rtl8139(&device) == 0)
+        return 0;
+
+    if (pci_find_device(PCNET_VENDOR_ID, PCNET_DEVICE_ID, &device) ||
+        pci_find_device(PCNET_VENDOR_ID, PCNET_DEVICE_ID_COMPAT, &device)) {
+        dbg_print("[NET] AMD PCnet adapter detected at PCI ");
+        dbg_print_dec(device.bus);
+        dbg_print(":");
+        dbg_print_dec(device.slot);
+        dbg_print(".");
+        dbg_print_dec(device.function);
+        dbg_print("\n");
+        if (net_init_pcnet(&device) == 0)
+            return 0;
+    }
+
+    dbg_print("[NET] No usable wired Ethernet adapter found\n");
+    return -1;
 }
 
 int net_available(void) {
@@ -1324,7 +1469,7 @@ static int parse_http_url(const char *url, struct http_url *result) {
     if (!*url) {
         result->path[pi++] = '/';
     } else {
-        while (*url && pi < 127)
+        while (*url && pi < 255)
             result->path[pi++] = *url++;
     }
     result->path[pi] = '\0';
@@ -1443,15 +1588,21 @@ static int http_decode_chunked(uint8_t *buf, int body_off, int total_len) {
 
     while (rp < total_len) {
         int size = 0;
+        int digits = 0;
         while (rp < total_len && buf[rp] != '\r' && buf[rp] != ';') {
             int d = from_hex_char((char)buf[rp]);
             if (d < 0) return -1;
             size = size * 16 + d;
+            digits++;
             rp++;
         }
-
-        if (rp + 1 >= total_len || buf[rp] != '\r' || buf[rp+1] != '\n')
-            return -1;
+        /* A page larger than our capture buffer may end in the middle of a
+         * chunk header. Keep the body decoded so far instead of discarding
+         * the whole page. */
+        if (rp + 1 >= total_len || buf[rp] != '\r' || buf[rp+1] != '\n') {
+            if (digits == 0) break;
+            return wp - body_off;
+        }
         rp += 2;
 
         if (size == 0) {
@@ -1460,17 +1611,237 @@ static int http_decode_chunked(uint8_t *buf, int body_off, int total_len) {
             break;
         }
 
-        if (rp + size > total_len) return -1;
+        if (size > total_len - rp) {
+            int available = total_len - rp;
+            for (int i = 0; i < available; i++)
+                buf[wp++] = buf[rp++];
+            return wp - body_off;
+        }
         for (int i = 0; i < size; i++)
             buf[wp++] = buf[rp++];
 
         if (rp + 1 >= total_len || buf[rp] != '\r' || buf[rp+1] != '\n')
-            return -1;
+            return wp - body_off;
         rp += 2;
     }
 
     return wp - body_off;
 }
+
+static int parse_https_url(const char *url, struct http_url *result) {
+    if (url[0] != 'h' || url[1] != 't' || url[2] != 't' || url[3] != 'p' ||
+        url[4] != 's' || url[5] != ':' || url[6] != '/' || url[7] != '/')
+        return -1;
+    url += 8;
+
+    int hi = 0;
+    while (*url && *url != ':' && *url != '/' && hi < 63)
+        result->host[hi++] = *url++;
+    result->host[hi] = '\0';
+    if (hi == 0) return -1;
+
+    result->port = HTTPS_PORT;
+    if (*url == ':') {
+        url++;
+        int p = 0;
+        while (*url >= '0' && *url <= '9') {
+            p = p * 10 + (*url - '0');
+            url++;
+        }
+        if (p <= 0 || p > 65535) return -1;
+        result->port = (uint16_t)p;
+    }
+
+    int pi = 0;
+    if (!*url) {
+        result->path[pi++] = '/';
+    } else {
+        while (*url && *url != '#' && pi < 255)
+            result->path[pi++] = *url++;
+    }
+    result->path[pi] = '\0';
+    return 0;
+}
+
+/* The capture buffer is static because a 64 KB local would overflow the
+ * 16 KB kernel syscall stack. HTTPS requests are synchronous, so one shared
+ * buffer is enough. It is sized to the Browser's response limit plus room for
+ * headers; larger pages are truncated (and chunked decoding keeps the prefix). */
+static uint8_t https_buf[800000];
+
+int net_https_get(const uint8_t *ip, uint16_t port,
+                  const char *host, const char *path,
+                  uint8_t *response, uint32_t max_size) {
+    if (!net_ready || !ip || !host || !path || !response || max_size == 0)
+        return -1;
+
+    uint8_t current_ip[4];
+    uint16_t current_port = port ? port : HTTPS_PORT;
+    char current_host[64];
+    char current_path[512];
+
+    for (int i = 0; i < 4; i++) current_ip[i] = ip[i];
+
+    int hi = 0;
+    while (host[hi] && hi < 63) {
+        current_host[hi] = host[hi];
+        hi++;
+    }
+    current_host[hi] = '\0';
+
+    int pi = 0;
+            while (path[pi] && pi < 511) {
+            current_path[pi] = path[pi];
+            pi++;
+        }
+    if (pi == 0) current_path[pi++] = '/';
+    current_path[pi] = '\0';
+
+    for (int redirect = 0; redirect <= HTTP_MAX_REDIRECTS; redirect++) {
+        int total = tls_https_get(current_ip, current_port, current_host,
+                                  current_path, https_buf, sizeof https_buf);
+        if (total < 0) return total;
+
+        struct http_response hr;
+        if (http_parse_response_ex(https_buf, total, &hr) < 0) {
+            int fallback = http_parse_response(https_buf, total, response, max_size);
+            dbg_print("[HTTPS] parse_ex failed, fallback=");
+            dbg_print_dec(fallback);
+            dbg_print("\n");
+            return fallback;
+        }
+
+        if (hr.status_code >= 300 && hr.status_code < 400 && hr.has_location) {
+            struct http_url new_url;
+            int absolute = 0;
+
+            if (hr.location[0] == 'h') {
+                if (parse_https_url(hr.location, &new_url) == 0) {
+                    absolute = 1;
+                } else {
+                    dbg_print("[HTTPS] Refusing non-HTTPS redirect: ");
+                    dbg_print(hr.location);
+                    dbg_print("\n");
+                    return -1;
+                }
+            } else if (hr.location[0] == '/' && hr.location[1] == '/') {
+                char absolute_url[256];
+                int ai = 0;
+                const char *prefix = "https:";
+                while (*prefix && ai < (int)sizeof(absolute_url) - 1)
+                    absolute_url[ai++] = *prefix++;
+                int li = 0;
+                while (hr.location[li] && ai < (int)sizeof(absolute_url) - 1)
+                    absolute_url[ai++] = hr.location[li++];
+                absolute_url[ai] = '\0';
+                if (parse_https_url(absolute_url, &new_url) == 0)
+                    absolute = 1;
+                else
+                    return -1;
+            } else if (hr.location[0] == '/') {
+                pi = 0;
+                while (hr.location[pi] && pi < 255) {
+                    current_path[pi] = hr.location[pi];
+                    pi++;
+                }
+                current_path[pi] = '\0';
+            } else {
+                int last_slash = 0;
+                for (int i = 0; current_path[i]; i++)
+                    if (current_path[i] == '/') last_slash = i;
+                pi = 0;
+                for (int i = 0; i <= last_slash; i++)
+                    current_path[pi++] = current_path[i];
+                int li = 0;
+                while (hr.location[li] && pi < 255)
+                    current_path[pi++] = hr.location[li++];
+                current_path[pi] = '\0';
+            }
+
+            if (absolute) {
+                hi = 0;
+                while (new_url.host[hi]) {
+                    current_host[hi] = new_url.host[hi];
+                    hi++;
+                }
+                current_host[hi] = '\0';
+                current_port = new_url.port;
+                pi = 0;
+                while (new_url.path[pi]) {
+                    current_path[pi] = new_url.path[pi];
+                    pi++;
+                }
+                current_path[pi] = '\0';
+
+                uint8_t new_ip[4];
+                if (net_parse_ipv4(current_host, new_ip) < 0 &&
+                    net_dns_resolve(current_host, new_ip) < 0) {
+                    dbg_print("[HTTPS] DNS failed for redirect: ");
+                    dbg_print(current_host);
+                    dbg_print("\n");
+                    return -1;
+                }
+                for (int i = 0; i < 4; i++) current_ip[i] = new_ip[i];
+            }
+
+            dbg_print("[HTTPS] Redirect ");
+            dbg_print_dec(hr.status_code);
+            dbg_print(" -> ");
+            dbg_print(hr.location);
+            dbg_print("\n");
+            continue;
+        }
+
+        int body_len = total - hr.body_offset;
+        if (body_len < 0) body_len = 0;
+
+        if (hr.is_chunked) {
+            int decoded = http_decode_chunked(https_buf, hr.body_offset, total);
+            if (decoded < 0) return -1;
+            body_len = decoded;
+        }
+
+        if (hr.content_length >= 0 && body_len > hr.content_length)
+            body_len = hr.content_length;
+
+        int copy = body_len;
+        if (copy > (int)max_size) copy = (int)max_size;
+        for (int i = 0; i < copy; i++)
+            response[i] = https_buf[hr.body_offset + i];
+
+        dbg_print("[HTTPS] status=");
+        dbg_print_dec(hr.status_code);
+        dbg_print(" body=");
+        dbg_print_dec(copy);
+        dbg_print("\n");
+        return copy;
+    }
+
+    dbg_print("[HTTPS] Too many redirects\n");
+    return -1;
+}
+
+static int net_https_redirect(const char *location, uint8_t *response,
+                              uint32_t max_size) {
+    struct http_url new_url;
+    if (parse_https_url(location, &new_url) < 0) return -1;
+
+    uint8_t new_ip[4];
+    if (net_parse_ipv4(new_url.host, new_ip) < 0 &&
+        net_dns_resolve(new_url.host, new_ip) < 0)
+        return -1;
+
+    return net_https_get(new_ip, new_url.port, new_url.host, new_url.path,
+                         response, max_size);
+}
+
+/* Responses are assembled here before being copied into the caller's
+ * buffer. It used to be an 8 KiB stack array, which silently truncated every
+ * package download: SOLPKG could never install anything from a real repo.
+ * One request runs at a time, so a single static buffer is enough, and 1 MiB
+ * covers the largest package while keeping the kernel stack untouched. */
+#define HTTP_RX_MAX (1024 * 1024)
+static uint8_t http_rx_buf[HTTP_RX_MAX];
 
 int net_http_get(const uint8_t *ip, uint16_t port,
                  const char *host, const char *path,
@@ -1489,7 +1860,7 @@ int net_http_get(const uint8_t *ip, uint16_t port,
     uint8_t current_ip[4];
     uint16_t current_port = port;
     char current_host[64];
-    char current_path[128];
+    char current_path[512];
 
     for (int i = 0; i < 4; i++) current_ip[i] = ip[i];
 
@@ -1512,7 +1883,7 @@ int net_http_get(const uint8_t *ip, uint16_t port,
 
     if (path) {
         int pi = 0;
-        while (path[pi] && pi < 127) { current_path[pi] = path[pi]; pi++; }
+        while (path[pi] && pi < 511) { current_path[pi] = path[pi]; pi++; }
         current_path[pi] = '\0';
     } else {
         current_path[0] = '/'; current_path[1] = '\0';
@@ -1550,21 +1921,26 @@ int net_http_get(const uint8_t *ip, uint16_t port,
         if (conn_rv < 0)
             return -1;
 
-        char http_req[512];
+        char http_req[768];
         int req_len = 0;
         const char *parts[] = {
-            "GET ", current_path, " HTTP/1.0\r\nHost: ", current_host, "\r\nConnection: close\r\n\r\n"
+            "GET ", current_path, " HTTP/1.0\r\nHost: ", current_host,
+            "\r\nUser-Agent: SolisBrowser/1.0\r\n"
+            "Accept: text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8\r\n"
+            "Accept-Language: en-US,en;q=0.9\r\nConnection: close\r\n\r\n"
         };
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < (int)(sizeof(parts) / sizeof(parts[0])); i++) {
             const char *s = parts[i];
-            while (*s) http_req[req_len++] = *s++;
+            while (*s && req_len < (int)sizeof(http_req) - 1)
+                http_req[req_len++] = *s++;
         }
+        http_req[req_len] = '\0';
 
         tcp_send_data(current_ip, current_port, my_port, snd_seq, snd_ack,
                       (const uint8_t *)http_req, req_len, TCP_FLAG_PSH);
         snd_seq += req_len;
 
-        uint8_t buf[8192];
+        uint8_t *buf = http_rx_buf;
         int total = 0;
         int got_fin = 0;
         uint32_t deadline = timer_get_ticks() + 200;
@@ -1573,8 +1949,10 @@ int net_http_get(const uint8_t *ip, uint16_t port,
             uint32_t new_seq = snd_seq;
             uint32_t new_ack = snd_ack;
             int fin_flag = 0;
+            if (total >= HTTP_RX_MAX) break;
             int n = tcp_recv_data(current_ip, current_port, my_port, &new_seq, &new_ack,
-                                  buf + total, 8192 - total, 100, &fin_flag);
+                                  buf + total, (uint32_t)(HTTP_RX_MAX - total), 100,
+                                  &fin_flag);
             if (n > 0) {
                 total += n;
                 snd_seq = new_seq;
@@ -1612,7 +1990,9 @@ int net_http_get(const uint8_t *ip, uint16_t port,
             if (hr.location[0] == 'h' && hr.location[1] == 't' &&
                 hr.location[2] == 't' && hr.location[3] == 'p' &&
                 hr.location[4] == 's') {
-                dbg_print("[HTTP] HTTPS redirect not supported: ");
+                int https_bytes = net_https_redirect(hr.location, response, max_size);
+                if (https_bytes != -1) return https_bytes;
+                dbg_print("[HTTP] HTTPS redirect failed: ");
                 dbg_print(hr.location);
                 dbg_print("\n");
                 return -1;
@@ -1639,7 +2019,7 @@ int net_http_get(const uint8_t *ip, uint16_t port,
                 for (int i = 0; i <= last_slash; i++)
                     current_path[pi++] = current_path[i];
                 int li = 0;
-                while (hr.location[li] && pi < 127)
+                while (hr.location[li] && pi < 255)
                     current_path[pi++] = hr.location[li++];
                 current_path[pi] = '\0';
             }

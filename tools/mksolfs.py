@@ -3,8 +3,8 @@
 
 Incremental: if the output image already exists and is a valid SOLFS disk,
 entries that are not package files (user files and directories created by the
-OS) are preserved. Package files (repo.json and *.spx) are always refreshed
-from the package directory.
+OS) are preserved. Package files (repo.json, *.spx, *.html and image assets)
+are always refreshed from the package directory.
 """
 import struct
 import sys
@@ -14,12 +14,12 @@ SECTOR_SIZE = 512
 DISK_SECTORS = 8192  # 4MB
 
 SOLFS_MAGIC = 0x53464F53
-SOLFS_VERSION = 1
+SOLFS_VERSION = 2
 SOLFS_FAT_ENTRIES = 8192
 SOLFS_FAT_SECTORS = 32
-SOLFS_DIR_ENTRIES = 32
-SOLFS_DIR_SECTORS = 2
-SOLFS_DATA_START = 35
+SOLFS_DIR_ENTRIES = 64
+SOLFS_DIR_SECTORS = 4
+SOLFS_DATA_START = 37
 
 SOLFS_FAT_FREE = 0x0000
 SOLFS_FAT_EOF = 0xFFFF
@@ -37,7 +37,8 @@ def load_existing_disk(path):
         return {}
 
     magic = struct.unpack_from('<I', disk, 0)[0]
-    if magic != SOLFS_MAGIC:
+    version = struct.unpack_from('<I', disk, 4)[0]
+    if magic != SOLFS_MAGIC or version != SOLFS_VERSION:
         return {}
 
     fat = [struct.unpack_from('<H', disk, (1 + i) * SECTOR_SIZE + j * 2)[0]
@@ -80,7 +81,14 @@ def collect_packages(pkg_dir):
             fpath = os.path.join(root, fname)
             if not os.path.isfile(fpath):
                 continue
-            if fname.endswith('.spx') or fname == 'repo.json':
+            if (fname.endswith('.spx') or fname.endswith('.html') or
+                    fname.endswith('.htm') or fname.endswith('.png') or
+                    fname.endswith('.bmp') or fname.endswith('.jpg') or
+                    fname.endswith('.jpeg') or fname.endswith('.gif') or
+                    fname.endswith('.ico') or fname.endswith('.tga') or
+                    fname.endswith('.ppm') or fname.endswith('.pgm') or
+                    fname.endswith('.pbm') or fname.endswith('.qoi') or
+                    fname.endswith('.xbm') or fname == 'repo.json'):
                 with open(fpath, 'rb') as f:
                     packages[fname] = f.read()
     return packages

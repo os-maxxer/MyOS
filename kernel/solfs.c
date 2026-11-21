@@ -4,12 +4,12 @@
 #include <stdbool.h>
 
 #define SOLFS_MAGIC       0x53464F53
-#define SOLFS_VERSION     1
+#define SOLFS_VERSION     2
 #define SOLFS_FAT_ENTRIES 8192
-#define SOLFS_DIR_ENTRIES 32
+#define SOLFS_DIR_ENTRIES 64
 #define SOLFS_FAT_SECTORS 32
-#define SOLFS_DIR_SECTORS 2
-#define SOLFS_DATA_START  35
+#define SOLFS_DIR_SECTORS 4
+#define SOLFS_DATA_START  37
 #define SOLFS_FAT_EOF     0xFFFF
 #define SOLFS_FAT_FREE    0x0000
 #define SOLFS_MIN_SECTORS 8192

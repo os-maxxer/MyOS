@@ -2,10 +2,14 @@
 
 Solis is a 64-bit hobby operating system for x86-64. It boots with GRUB
 (Multiboot2), draws a GUI desktop through a VBE framebuffer, and ships a small
-set of built-in applications. **Solis 2.0 "Daybreak"** adds a required edition
-step with three install profiles, passwordless guest sessions, and a real
-playable Doom port in the Extra edition. It is written in freestanding C with
-no libc, and is primarily developed and run inside QEMU.
+set of built-in applications. **Solis 2.1 "Bedrock"** builds on the 2.0 edition
+work with a restart-safe Edition Manager, passwordless guest sessions, and a
+real playable Doom port in the Extra edition. It is written in freestanding C
+with no libc, and is primarily developed and run inside QEMU.
+
+The latest pass adds a 1920x1080 desktop, selectable Browser search APIs,
+GIF/ICO/TGA/PNM/QOI/XBM picture support, larger source limits, and the requested 100 changes. The full ledger and
+test status are in **[CHANGES-100.md](CHANGES-100.md)**.
 
 ## Why the name Solis?
 
@@ -58,7 +62,7 @@ tested to its full extent**:
 
 ## Features
 
-- **Boot**: GRUB 2 / Multiboot2, BIOS and UEFI boot media, 1024x768x32 VBE
+- **Boot**: GRUB 2 / Multiboot2, BIOS and UEFI boot media, 1920x1080x32 VBE
   framebuffer, and a verbose framebuffer boot report before setup or login
 - **GUI**: Solis UI Engine desktop, window manager, app-specific drawn icons,
   a dark abstract wallpaper, rounded windows and taskbar, and an app grid
@@ -68,22 +72,27 @@ tested to its full extent**:
 - **Themes**: Solis UI Engine (calm navy abstract wallpaper, blue/cyan
   accents, and flat rounded chrome), Voxel Dusk, BoredOS, Aurora, Gnome,
   Sunset, Cherry Blossom, Starfield, and solid colors
-- **Editions**: Minimal keeps the core apps, Standard adds every built-in app,
-  and Extra adds a real Doom shareware port. Apps outside the selected edition
-  are pruned at install time and their staged package files are removed.
+- **Editions**: Minimal keeps the core apps, Standard adds every built-in app
+  except Doom, and Extra adds a real Doom shareware port. Browser appears in
+  Standard and Extra while the network is configured. Apps outside the selected
+  edition are pruned at install time and their staged package files are removed.
+- **Edition Manager**: **Settings > Edition** queues a restarted app-set change
+  without reinstalling or erasing files. Selecting the current edition cancels
+  a queued change; the account and data disk are left in place.
 - **Guest access**: **Continue as guest** is available in setup and on the
   sign-in screen. Guest sessions are persisted locally, need no password, and
   are marked **GUEST** in the desktop menu and tray.
 - **Apps**: Helios, Notepad, Paint, Settings, Files, Task Manager, SOLPKG,
-  Editor, Tetris, Solis Blocks, Calculator, Doom (Extra only)
+  Editor, Tetris, Solis Blocks, Calculator, Browser (web + local HTML), Doom
+  (Extra only)
 - **Recent polish**: single-instance windows, edge snapping, double-click
   maximize, Ctrl+W/Ctrl+Q, keyboard app-menu navigation, persistent themes,
   Paint drawing tools and undo, Tetris hold, calculator memory, sortable
   Files, pauseable Task Manager, Notepad/Editor status and navigation, a
   Settings gateway ping, Helios command history, and a Blocks compass
 - **Languages**: A native x86-64 C subset compiler, an `SCX` executable-image
-  runner, and an integer-only Lua interpreter in Helios, plus C/Lua syntax
-  highlighting in Editor
+  runner, an integer-only Lua interpreter in Helios, and a bounded DOM script
+  engine in Browser, plus C/Lua/HTML syntax highlighting in Editor
 - **Filesystem**: SOLFS on an ATA/IDE or AHCI/SATA disk, or a GPT Solis data
   partition, with bounded allocation chains and mount-time consistency checks,
   plus a small VFS
@@ -93,9 +102,14 @@ tested to its full extent**:
 - **Installation**: host-side helper for an existing GPT layout and a
   self-booting UEFI VDI builder; the host helper preserves other partitions
   while updating boot code and formatting the selected SOLFS partition
-- **Networking**: RTL8139 wired Ethernet driver with DHCP, ARP, ping, DNS, and
-  an experimental HTTP client; Wi-Fi and HTTPS are not yet supported. Settings
-  shows current network availability and the Wi-Fi support status.
+- **Networking**: RTL8139 and AMD PCnet-FAST III (Am79C973) wired Ethernet
+  drivers with DHCP, ARP, ping, DNS, and an HTTP/HTTPS client; the Browser
+  app uses that client and is available only while the network is up. HTTPS
+  uses TLS 1.2 in the kernel with certificate validation against a bundle of
+  public roots (ISRG, DigiCert, Google Trust Services, Amazon, and
+  Sectigo/USERTrust among others), so more sites can be reached. Wi-Fi is
+  not yet supported. Settings shows the active adapter, current
+  network availability, and the Wi-Fi support status.
 - **Input**: PS/2 keyboard + mouse and xHCI USB boot-protocol HID keyboards
   and mice; selected Intel and AMD SMBus controller support; HID-over-I2C
   touchpads remain experimental. USB input is QEMU-tested but still needs
@@ -133,25 +147,42 @@ tested to its full extent**:
 
 ## Applications
 
-Solis ships with twelve built-in apps. They are compiled as freestanding
+Solis ships with thirteen built-in apps. They are compiled as freestanding
 binaries, wrapped in the SPX package format, and embedded in the kernel. They
 can be launched from the desktop icons, the taskbar's pinned launchers, or the
-Apps grid (the launcher button on the left of the taskbar):
+Apps grid (the launcher button on the left of the taskbar). Browser is hidden
+while the network is unavailable, and Doom is only present in Extra:
 
 | App | What it does |
 |--------------|---------------------------------------------------------------------|
 | **Helios** | Interactive shell with filesystem commands, a native C compiler, `SCX` runner, and Lua interpreter |
 | **Notepad** | Plain-text editor with save/load |
 | **Paint** | Pixel drawing canvas with a palette and brush tools |
-| **Settings** | Theme/wallpaper, background color, and timezone configuration |
+| **Settings** | Theme/wallpaper, background color, timezone, edition, and AC'97 sound test |
 | **Files** | Browse the SOLFS disk |
 | **Task Manager** | System summary: CPU, RAM, uptime, hardware ID, and installed apps |
-| **SOLPKG** | Package manager for the SOLPKG repo |
-| **Editor** | Source code editor with C syntax highlighting (Ctrl+S save, Ctrl+N new, Ctrl+Z undo) |
+| **SOLPKG** | Package manager: `repo-list`, `fetch`, `upgrade`, `local-install`, `purge`, and slot-aware installs from the `.spx` repo |
+| **Editor** | Source editor with C, Lua, ASM, and HTML highlighting (Ctrl+S save, Ctrl+N new, Ctrl+Z undo) |
 | **Tetris** | Classic falling-blocks game |
 | **Solis Blocks** | First-person 3D voxel sandbox with mining and block building |
 | **Calculator** | Keyboard and mouse arithmetic calculator |
+| **Browser** | HTTP/HTTPS and local-file browser with CSS styling, UTF-8 text with Latin/Greek/Cyrillic/punctuation glyphs, BMP/PNG/JPEG/GIF/ICO/TGA/PNM/QOI/XBM images, section links, downloads, web/Wikipedia/GitHub search with selectable APIs, a bounded JavaScript engine, clickable links, TLS 1.2, and a shortcut start page; Standard/Extra only |
 | **Doom** | Doom shareware Episode 1, ported with doomgeneric; Extra edition only |
+
+### Packages and the repository
+
+`make` builds every app as a pinned `.spx` in `pkg/<name>/`, and `pkg/repo.json`
+describes the repository. In SOLPKG, `repo add http://10.0.2.2:8000` points at
+the host test server, `repo-list` reads the manifest, and `fetch <name>`
+downloads and installs one. Each package declares the slot it was linked for,
+so an install upgrades that app in place instead of loading a fixed-address
+image into the wrong slot; a slot held by a different app is reported rather
+than overwritten, and a package cannot replace the running SOLPKG.
+
+`make commit` publishes the built packages to `os-maxxer/NPK` with
+`tools/npk_commit.py`, uploading each `.spx` and deleting the old `.npx` it
+replaces. It needs a `GITHUB_TOKEN` with `contents: write` (or a logged-in
+`gh`); `make commit-dry` prints the changes without touching GitHub.
 
 ## Using the desktop
 
@@ -161,7 +192,8 @@ Apps grid (the launcher button on the left of the taskbar):
   the theme and timezone. Use Tab to move, Enter to continue, and `[` / `]` to
   change the selected theme or timezone.
 - Click a **desktop icon**, a **taskbar** launcher, or open the **Apps grid**
-  to launch an app. Windows can be dragged by their title bar.
+  to launch an app. `F1`–`F10` open the first ten apps, `F11` opens Browser,
+  and `F12` opens Settings. Windows can be dragged by their title bar.
 - Each window has **minimize**, **maximize**, and **close** buttons (top
   right) that stay flat until hovered; windows cast a soft drop shadow.
 - The **taskbar** is a floating rounded card at the bottom: the launcher on
@@ -170,6 +202,9 @@ Apps grid (the launcher button on the left of the taskbar):
   clock on the right. Click a window button to focus, minimize, or restore
   it; pinned launchers shrink automatically when many windows are open.
 - The **Settings** app changes the theme and background in real time.
+- **Settings > Edition** changes the installation profile. The new app set is
+  applied on the next restart, so windows and user data are never unloaded or
+  erased underneath a running session.
 - **Settings > Time & Date** changes the clock timezone and saves it for the next boot.
 - Helios supports `cc file.c` to compile a C source file into a native `.scx`
   image, `run file.c` to compile and execute it in memory, `run file.scx` to
@@ -184,6 +219,62 @@ Apps grid (the launcher button on the left of the taskbar):
   uses `Ctrl+G` to jump to a line.
 - **Calculator** accepts `M` to add to memory, `R` to recall it, and `%` for
   percentage calculations.
+- **Browser** fetches HTTP and HTTPS pages and opens local HTML files. It
+  renders headings, paragraphs, CSS `<style>` rules, inline colors and
+  backgrounds, links, buttons, rules, and BMP/PNG/JPEG/GIF/ICO/TGA/PNM/QOI/XBM
+  images instead of showing a text dump. The 1080p desktop and larger Browser
+  window keep the UI crisp instead of stretching a low-resolution frame. Two
+  picture galleries are available at `file:///picture-formats.html` and
+  `file:///picture-formats-2.html`; the latter covers TGA, PPM, PGM, PBM, QOI,
+  and XBM. Source limits are PNG 384x256, TGA and PNM 8192x8192, BMP
+  8192x8192, GIF 4096x4096, ICO 1024x1024, QOI/XBM 4096x4096, and JPEG
+  16384x16384; images are sampled down to the thumbnail cache instead of
+  allocating a full frame. The small CSS engine supports tag, class, id, and
+  descendant selectors with colors, backgrounds, display, margins, padding,
+  borders, radius, font weight, alignment, and underline. Type plain words such
+  as `wikipedia`, `solar system`, or `latest news` in the address bar and press
+  Enter to see a Solis search-results page; exact addresses still work. The
+  search uses a keyless web API, with DuckDuckGo and Wikipedia links on the
+  results page, and results open like normal pages. A small DOM-lite script
+  engine supports `var`/`let`, functions, loops, `document.getElementById`
+  and `querySelector`, `textContent`/`innerHTML`, `style`, `onclick`,
+  `addEventListener`, `document.write`, and `window.onload`; it is deliberately
+  bounded and integer-only. The DOM API, string/array helpers, timers, and
+  `classList` are deliberately bounded, so scripts cannot stall the desktop.
+  Section links (`#try`) scroll within the open page, and Wikipedia article
+  fragments such as `#History` resolve after the article loads. Typing `wiki`
+  or `wikipedia` searches Wikipedia, while `gh` or `github` searches GitHub
+  repositories; direct `wikipedia.org` and `github.com/search` addresses are
+  detected too. Wikipedia and GitHub search pages include their branded
+  header and a working search field, and result rows show article thumbnails
+  or owner avatars. Search forms use Solis's own result pages instead of
+  loading the script-heavy source sites, so submitting a search cannot wedge
+  the desktop. The toolbar's `Settings` button opens Browser Settings, where
+  Light or Dark mode applies to Solis pages; web search can use Bing RSS,
+  DuckDuckGo, or FreeSerp as its primary API; DuckDuckGo can be off, used only
+  as a fallback, or merged into every web search; and pictures or JavaScript
+  can be disabled. A failed provider falls through to Bing, DuckDuckGo, then
+  FreeSerp so a temporary outage does not leave a blank results page. These
+  choices are saved in `/home/browser.cfg`. GitHub repository addresses render a themed repository
+  page from the public API with the owner avatar, stats, navigation, About
+  panel, and the beginning of its README (including repositories that use a
+  plain `README`) instead of downloading GitHub's full script bundle. Press `Save`
+  or `Ctrl+S`, or follow a link with the `download` attribute, to copy a page
+  or file into `/home/downloads` with a safe, non-clobbering filename. The
+  start page has a search field, colored shortcuts, and a `Welcome page` tile;
+  use `Open` to pick a local file. Type `file:///welcome.html` (or any
+  `file:///path/page.html`) to open a page from the Solis disk. HTTPS uses TLS
+  1.2 with certificate validation against several public roots, so Wikipedia,
+  GitHub, and the search service load. A failed DNS lookup or connection is
+  retried once before Browser reports an error. Click links and buttons in the
+  page, use the mouse wheel or arrow keys to scroll, `Tab` to focus the
+  address bar, `Ctrl+L` to select it, `Ctrl+R` to reload, and `Backspace` outside the
+  address bar to go back. The sample local page demonstrates CSS cards, a
+  JPEG photograph, an interactive button, section links, downloads, and the
+  search instructions.
+- **Editor** supports C, Lua, ASM, and HTML modes. HTML files opened from Files
+  switch to HTML mode automatically; the mode buttons cycle through all four
+  languages.
 - **Tetris** uses `H` to hold a piece, `P` to pause, and `R` to restart.
 - **Task Manager** uses `P` to pause live refresh and `R` to refresh.
 - **Doom** (Extra) uses the arrow keys to move, `Ctrl` to fire, `Shift` to run,
@@ -198,14 +289,15 @@ environment. These are the minimums to run it (the defaults used by the
 - **CPU**: 64-bit x86-64 with long-mode support; one core is enough
 - **RAM**: 256 MB
 - **Graphics**: VBE-capable display adapter able to provide a
-  1024x768x32 framebuffer mode
+  1920x1080x32 framebuffer mode
 - **Storage**: a 512-byte-sector ATA/IDE disk on either IDE channel, in the
   master or slave position, or a SATA disk behind an AHCI controller; NVMe,
   USB, and other disks are not supported by the current kernel drivers
 - **Input**: a PS/2 keyboard and mouse, or an xHCI USB boot-protocol HID
   keyboard and mouse (USB tested in QEMU; physical-controller compatibility
   is not yet verified; I2C touchpad support is experimental)
-- **Network** *(optional)*: an RTL8139 Ethernet card for networking
+- **Network** *(optional)*: an RTL8139 or AMD PCnet-FAST III (Am79C973)
+  Ethernet card for networking
 - **Boot**: GRUB 2 with Multiboot2 support
 
 The recommended way to run Solis today is inside QEMU (see
@@ -316,7 +408,7 @@ make clean      # removes build artifacts
 ```
 
 The x86-64 kernel and applications are compiled into a single ISO, and the
-twelve built-in apps are embedded in the kernel as x86-64 SPX packages. The
+thirteen built-in apps are embedded in the kernel as x86-64 SPX packages. The
 Extra edition also embeds the 4.1 MB shareware `doom1.wad` in kernel `.rodata`.
 
 ## Running
@@ -342,6 +434,16 @@ make boot-vdi        # build a self-booting UEFI build/solis-uefi.vdi
 The default QEMU invocation boots the ISO with the pre-loaded package disk
 attached as an IDE drive. Networking uses QEMU's user-mode NIC with an RTL8139
 model (`-nic user,model=rtl8139`).
+
+VirtualBox's NAT mode works with its **PCnet-FAST III** adapter. Attach it to a
+powered-off VM with:
+
+```sh
+VBoxManage modifyvm "<vm-name>" --nic1 nat --nictype1 Am79C973 --cableconnected1 on
+```
+
+Solis probes for the RTL8139 first and falls back to the PCnet-FAST III, so
+either adapter can be left attached.
 
 ## Installing to a physical disk
 
@@ -503,13 +605,13 @@ saving is not applied.
 boot/             Multiboot2 entry (32-bit transition to long mode) + GRUB config
 kernel/           core kernel: console, gdt/idt/pic, keyboard/mouse, RTC,
                   graphics (VBE), timer (PIT), ATA/AHCI, SOLFS/VFS, SPX package
-                  loader, PCI + RTL8139 networking, x86-64 interrupt entry
+                  loader, PCI + RTL8139/PCnet networking, x86-64 interrupt entry
 gui/              desktop shell (windows, taskbar, app grid, login)
 window_manager/   thin facade over the GUI
 desktop/          desktop init/redraw
 apps/             built-in SPX applications + syscall glue
-pkg/              packaged apps (taskmanager, solpkg) and the SOLPKG repo
-                  metadata
+pkg/              every built-in app packaged as .spx plus the repo.json
+                  manifest served by the SOLPKG repository
 tools/            SPX/SOLFS build helpers, host installer, and test HTTP server
 include/solis/    public headers shared by the kernel and applications
 ```

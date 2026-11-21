@@ -131,10 +131,23 @@ int user_main(void) {
             write_message(file_offset_error, sizeof(file_offset_error) - 1);
             return 11;
         }
+        /* The repository manifest changes size between releases, so read it
+         * to EOF instead of asserting one fixed length. The offset must still
+         * advance across reads and a short/zero read must stick at EOF. */
         uint8_t chunk[256];
-        if (syscall3(SYSCALL_READ, fd, (uintptr_t)chunk, sizeof(chunk)) != 256 ||
-            syscall3(SYSCALL_READ, fd, (uintptr_t)chunk, sizeof(chunk)) != 256 ||
-            syscall3(SYSCALL_READ, fd, (uintptr_t)chunk, sizeof(chunk)) != 129 ||
+        uint64_t total = 0;
+        for (;;) {
+            uint64_t got = syscall3(SYSCALL_READ, fd, (uintptr_t)chunk,
+                                    sizeof(chunk));
+            if (got == 0) break;
+            if (got == UINT64_MAX || got > sizeof(chunk) || total > 65536) {
+                write_message(file_offset_error,
+                              sizeof(file_offset_error) - 1);
+                return 11;
+            }
+            total += got;
+        }
+        if (total < 256 ||
             syscall3(SYSCALL_READ, fd, (uintptr_t)chunk, sizeof(chunk)) != 0) {
             write_message(file_offset_error, sizeof(file_offset_error) - 1);
             return 11;

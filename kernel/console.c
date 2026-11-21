@@ -48,6 +48,12 @@ int memcmp(const void *a, const void *b, unsigned long n) {
     return 0;
 }
 
+unsigned long strlen(const char *s) {
+    const char *p = s;
+    while (*p) p++;
+    return (unsigned long)(p - s);
+}
+
 static uint16_t *video_memory = (uint16_t *)0xB8000;
 static uint8_t cursor_row = 0;
 static uint8_t cursor_col = 0;

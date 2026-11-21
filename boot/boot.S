@@ -10,8 +10,8 @@ multiboot_header:
     .align 8
     .long (5 | (1 << 16))
     .long 20
-    .long 1024
-    .long 768
+    .long 1920
+    .long 1080
     .long 32
     .align 8
     .long 0

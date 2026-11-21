@@ -28,6 +28,17 @@ DOOM_CFLAGS := -m64 -ffreestanding -fno-pie -fno-stack-protector -fno-builtin \
 	-fno-asynchronous-unwind-tables -mno-red-zone -msse2 -mfpmath=sse -O2 -w \
 	-DSOLIS -Iinclude -I$(DOOM_DIR) -I$(DOOM_DIR)/compat -I$(DOOM_DIR)/solis
 
+BEARSSL_DIR := third_party/bearssl
+BEARSSL_SRCS := $(wildcard $(BEARSSL_DIR)/src/*.c) $(wildcard $(BEARSSL_DIR)/src/*/*.c)
+BEARSSL_OBJS := $(patsubst $(BEARSSL_DIR)/src/%.c,$(BUILD_DIR)/bearssl/%.o,$(BEARSSL_SRCS))
+BEARSSL_CFLAGS := -m64 -ffreestanding -fno-pie -fno-stack-protector -fno-builtin \
+	-fno-asynchronous-unwind-tables -mno-red-zone -mno-sse -mno-sse2 -mno-mmx \
+	-mno-80387 -O2 -w -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src \
+	-DBR_USE_URANDOM=0 -DBR_USE_WIN32_RAND=0 -DBR_USE_UNIX_TIME=0 \
+	-DBR_USE_WIN32_TIME=0 -DBR_RDRAND=0 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
+	-DBR_AES_X86NI=0 -DBR_GHASH_PCLMUL=0 -DBR_AES_PWR8=0 -DBR_GHASH_PWR8=0
+TLS_CFLAGS := $(CFLAGS) -I$(BEARSSL_DIR)/inc -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
+
 OBJS := \
 	$(BUILD_DIR)/boot/boot.o \
 	$(BUILD_DIR)/kernel/kernel.o \
@@ -49,6 +60,7 @@ OBJS := \
 	$(BUILD_DIR)/kernel/i2c.o \
 	$(BUILD_DIR)/kernel/touchpad.o \
 	$(BUILD_DIR)/kernel/graphics.o \
+	$(BUILD_DIR)/kernel/text.o \
 	$(BUILD_DIR)/kernel/timer.o \
 	$(BUILD_DIR)/kernel/rtc.o \
 	$(BUILD_DIR)/kernel/apic.o \
@@ -59,8 +71,12 @@ OBJS := \
 	$(BUILD_DIR)/kernel/ahci.o \
 	$(BUILD_DIR)/kernel/pci.o \
 	$(BUILD_DIR)/kernel/rtl8139.o \
+	$(BUILD_DIR)/kernel/pcnet.o \
 	$(BUILD_DIR)/kernel/net_device.o \
 	$(BUILD_DIR)/kernel/net.o \
+	$(BUILD_DIR)/kernel/audio.o \
+	$(BUILD_DIR)/kernel/tls.o \
+	$(BUILD_DIR)/kernel/tls_trust.o \
 	$(BUILD_DIR)/kernel/acpi.o \
 	$(BUILD_DIR)/kernel/dbg.o \
 	$(BUILD_DIR)/kernel/jit.o \
@@ -76,7 +92,8 @@ OBJS := \
 	$(BUILD_DIR)/desktop/desktop.o \
 	$(BUILD_DIR)/kernel/arch/x86_64/interrupts.o \
 	$(BUILD_DIR)/kernel/arch/x86_64/usermode_entry.o \
-	$(BUILD_DIR)/user_test_embed.o
+	$(BUILD_DIR)/user_test_embed.o \
+	$(BEARSSL_OBJS)
 
 SPX_EMBED_OBJS := \
 	$(SPX_DIR)/terminal_spx_embed.o \
@@ -89,9 +106,11 @@ SPX_EMBED_OBJS := \
 	$(SPX_DIR)/editor_spx_embed.o \
 	$(SPX_DIR)/tetris_spx_embed.o \
 	$(SPX_DIR)/blocks_spx_embed.o \
+	$(SPX_DIR)/ck3_spx_embed.o \
 	$(SPX_DIR)/calculator_spx_embed.o
 
 SPX_EMBED_OBJS += $(SPX_DIR)/doom_spx_embed.o
+SPX_EMBED_OBJS += $(SPX_DIR)/browser_spx_embed.o
 
 all: $(BUILD_DIR)/solis.iso pkg-spx
 
@@ -129,6 +148,16 @@ $(BUILD_DIR)/kernel/task.o: $(KERNEL_DIR)/task.c | $(BUILD_DIR)
 $(BUILD_DIR)/kernel/console.o: $(KERNEL_DIR)/console.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kernel/tls.o: $(KERNEL_DIR)/tls.c | $(BUILD_DIR)
+	$(CC) $(TLS_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/tls_trust.o: $(KERNEL_DIR)/tls_trust.c | $(BUILD_DIR)
+	$(CC) $(TLS_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/bearssl/%.o: $(BEARSSL_DIR)/src/%.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(BEARSSL_CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel/gdt.o: $(KERNEL_DIR)/gdt.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -163,6 +192,9 @@ $(BUILD_DIR)/kernel/touchpad.o: $(KERNEL_DIR)/touchpad.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/graphics.o: $(KERNEL_DIR)/graphics.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/text.o: $(KERNEL_DIR)/text.c include/solis/text.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/timer.o: $(KERNEL_DIR)/timer.c | $(BUILD_DIR)
@@ -210,10 +242,16 @@ $(BUILD_DIR)/kernel/pci.o: $(KERNEL_DIR)/pci.c | $(BUILD_DIR)
 $(BUILD_DIR)/kernel/rtl8139.o: $(KERNEL_DIR)/rtl8139.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kernel/pcnet.o: $(KERNEL_DIR)/pcnet.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel/net_device.o: $(KERNEL_DIR)/net_device.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/net.o: $(KERNEL_DIR)/net.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel/audio.o: $(KERNEL_DIR)/audio.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel/acpi.o: $(KERNEL_DIR)/acpi.c | $(BUILD_DIR)
@@ -286,7 +324,8 @@ $(SPX_DIR)/terminal.bin: $(SPX_DIR)/terminal.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/terminal.spx: $(SPX_DIR)/terminal.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Helios $@
+	bss=$$(size -A $(SPX_DIR)/terminal.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Helios $@ $${bss:-0} 0x01000000
 
 $(SPX_DIR)/terminal_spx_embed.o: $(SPX_DIR)/terminal.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -302,13 +341,14 @@ $(SPX_DIR)/notepad_spx_stub.o: $(APPS_DIR)/notepad_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/notepad.elf: $(SPX_DIR)/notepad.o $(SPX_DIR)/glue_notepad.o $(SPX_DIR)/notepad_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01200000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01300000 -o $@ $^
 
 $(SPX_DIR)/notepad.bin: $(SPX_DIR)/notepad.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/notepad.spx: $(SPX_DIR)/notepad.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Notepad $@
+	bss=$$(size -A $(SPX_DIR)/notepad.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Notepad $@ $${bss:-0} 0x01300000
 
 $(SPX_DIR)/notepad_spx_embed.o: $(SPX_DIR)/notepad.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -324,13 +364,14 @@ $(SPX_DIR)/paint_spx_stub.o: $(APPS_DIR)/paint_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/paint.elf: $(SPX_DIR)/paint.o $(SPX_DIR)/glue_paint.o $(SPX_DIR)/paint_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01400000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01600000 -o $@ $^
 
 $(SPX_DIR)/paint.bin: $(SPX_DIR)/paint.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/paint.spx: $(SPX_DIR)/paint.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Paint $@
+	bss=$$(size -A $(SPX_DIR)/paint.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Paint $@ $${bss:-0} 0x01600000
 
 $(SPX_DIR)/paint_spx_embed.o: $(SPX_DIR)/paint.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -346,13 +387,14 @@ $(SPX_DIR)/settings_spx_stub.o: $(APPS_DIR)/settings_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/settings.elf: $(SPX_DIR)/settings.o $(SPX_DIR)/glue_settings.o $(SPX_DIR)/settings_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01600000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01900000 -o $@ $^
 
 $(SPX_DIR)/settings.bin: $(SPX_DIR)/settings.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/settings.spx: $(SPX_DIR)/settings.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Settings $@
+	bss=$$(size -A $(SPX_DIR)/settings.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Settings $@ $${bss:-0} 0x01900000
 
 $(SPX_DIR)/settings_spx_embed.o: $(SPX_DIR)/settings.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -368,13 +410,14 @@ $(SPX_DIR)/filebrowser_spx_stub.o: $(APPS_DIR)/filebrowser_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/filebrowser.elf: $(SPX_DIR)/filebrowser.o $(SPX_DIR)/glue_filebrowser.o $(SPX_DIR)/filebrowser_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01800000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01C00000 -o $@ $^
 
 $(SPX_DIR)/filebrowser.bin: $(SPX_DIR)/filebrowser.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/filebrowser.spx: $(SPX_DIR)/filebrowser.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Files $@
+	bss=$$(size -A $(SPX_DIR)/filebrowser.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Files $@ $${bss:-0} 0x01C00000
 
 $(SPX_DIR)/filebrowser_spx_embed.o: $(SPX_DIR)/filebrowser.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -390,13 +433,14 @@ $(SPX_DIR)/taskmanager_spx_stub.o: $(PKG_DIR)/taskmanager/taskmanager_spx.c | $(
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/taskmanager.elf: $(SPX_DIR)/taskmanager.o $(SPX_DIR)/glue_taskmanager.o $(SPX_DIR)/taskmanager_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01A00000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01F00000 -o $@ $^
 
 $(SPX_DIR)/taskmanager.bin: $(SPX_DIR)/taskmanager.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/taskmanager.spx: $(SPX_DIR)/taskmanager.bin tools/mkspx.py
-	python3 tools/mkspx.py $< "TaskManager" $@
+	bss=$$(size -A $(SPX_DIR)/taskmanager.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< "TaskManager" $@ $${bss:-0} 0x01F00000
 
 $(SPX_DIR)/taskmanager_spx_embed.o: $(SPX_DIR)/taskmanager.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -412,13 +456,14 @@ $(SPX_DIR)/pkg_spx_stub.o: $(PKG_DIR)/solpkg/pkg_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/pkg.elf: $(SPX_DIR)/pkg.o $(SPX_DIR)/glue_pkg.o $(SPX_DIR)/pkg_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01C00000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02200000 -o $@ $^
 
 $(SPX_DIR)/pkg.bin: $(SPX_DIR)/pkg.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/pkg.spx: $(SPX_DIR)/pkg.bin tools/mkspx.py
-	python3 tools/mkspx.py $< "SOLPKG" $@
+	bss=$$(size -A $(SPX_DIR)/pkg.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< "SOLPKG" $@ $${bss:-0} 0x02200000
 
 $(SPX_DIR)/pkg_spx_embed.o: $(SPX_DIR)/pkg.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -434,13 +479,14 @@ $(SPX_DIR)/editor_spx_stub.o: $(APPS_DIR)/editor_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/editor.elf: $(SPX_DIR)/editor.o $(SPX_DIR)/glue_editor.o $(SPX_DIR)/editor_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x01E00000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02500000 -o $@ $^
 
 $(SPX_DIR)/editor.bin: $(SPX_DIR)/editor.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/editor.spx: $(SPX_DIR)/editor.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Editor $@
+	bss=$$(size -A $(SPX_DIR)/editor.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Editor $@ $${bss:-0} 0x02500000
 
 $(SPX_DIR)/editor_spx_embed.o: $(SPX_DIR)/editor.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -456,13 +502,14 @@ $(SPX_DIR)/tetris_spx_stub.o: $(APPS_DIR)/tetris_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/tetris.elf: $(SPX_DIR)/tetris.o $(SPX_DIR)/glue_tetris.o $(SPX_DIR)/tetris_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02000000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02800000 -o $@ $^
 
 $(SPX_DIR)/tetris.bin: $(SPX_DIR)/tetris.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/tetris.spx: $(SPX_DIR)/tetris.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Tetris $@
+	bss=$$(size -A $(SPX_DIR)/tetris.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Tetris $@ $${bss:-0} 0x02800000
 
 $(SPX_DIR)/tetris_spx_embed.o: $(SPX_DIR)/tetris.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -478,15 +525,39 @@ $(SPX_DIR)/blocks_spx_stub.o: $(APPS_DIR)/blocks_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/blocks.elf: $(SPX_DIR)/blocks.o $(SPX_DIR)/glue_blocks.o $(SPX_DIR)/blocks_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02200000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02B00000 -o $@ $^
 
 $(SPX_DIR)/blocks.bin: $(SPX_DIR)/blocks.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/blocks.spx: $(SPX_DIR)/blocks.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Blocks $@
+	bss=$$(size -A $(SPX_DIR)/blocks.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Blocks $@ $${bss:-0} 0x02B00000
 
 $(SPX_DIR)/blocks_spx_embed.o: $(SPX_DIR)/blocks.spx
+	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
+
+# --- Crusader Kings III ---
+$(SPX_DIR)/ck3.o: $(APPS_DIR)/ck3.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/glue_ck3.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/ck3_spx_stub.o: $(APPS_DIR)/ck3_spx.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/ck3.elf: $(SPX_DIR)/ck3.o $(SPX_DIR)/glue_ck3.o $(SPX_DIR)/ck3_spx_stub.o
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x03700000 -o $@ $^
+
+$(SPX_DIR)/ck3.bin: $(SPX_DIR)/ck3.elf
+	$(OBJCOPY) -O binary $< $@
+
+$(SPX_DIR)/ck3.spx: $(SPX_DIR)/ck3.bin tools/mkspx.py
+	bss=$$(size -A $(SPX_DIR)/ck3.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< CK3 $@ $${bss:-0} 0x03700000
+
+$(SPX_DIR)/ck3_spx_embed.o: $(SPX_DIR)/ck3.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
 
 # --- Calculator ---
@@ -500,13 +571,14 @@ $(SPX_DIR)/calculator_spx_stub.o: $(APPS_DIR)/calculator_spx.c | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/calculator.elf: $(SPX_DIR)/calculator.o $(SPX_DIR)/glue_calculator.o $(SPX_DIR)/calculator_spx_stub.o
-	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02400000 -o $@ $^
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x02E00000 -o $@ $^
 
 $(SPX_DIR)/calculator.bin: $(SPX_DIR)/calculator.elf
 	$(OBJCOPY) -O binary $< $@
 
 $(SPX_DIR)/calculator.spx: $(SPX_DIR)/calculator.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Calculator $@
+	bss=$$(size -A $(SPX_DIR)/calculator.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Calculator $@ $${bss:-0} 0x02E00000
 
 $(SPX_DIR)/calculator_spx_embed.o: $(SPX_DIR)/calculator.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
@@ -520,25 +592,117 @@ $(BUILD_DIR)/doom/%.o: $(DOOM_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(DOOM_CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/doom.elf: $(DOOM_OBJS) apps/link_app.ld
-	$(LD) -m elf_x86_64 -T apps/link_app.ld -nostdlib --defsym BASE=0x02600000 -o $@ $(DOOM_OBJS)
+	$(LD) -m elf_x86_64 -T apps/link_app.ld -nostdlib --defsym BASE=0x03100000 -o $@ $(DOOM_OBJS)
 
 $(SPX_DIR)/doom.bin: $(SPX_DIR)/doom.elf
 	$(OBJCOPY) --set-section-flags .bss=alloc,load,contents -O binary $< $@
 
 $(SPX_DIR)/doom.spx: $(SPX_DIR)/doom.bin tools/mkspx.py
-	python3 tools/mkspx.py $< Doom $@
+	python3 tools/mkspx.py $< Doom $@ 0 0x03100000
 
 $(SPX_DIR)/doom_spx_embed.o: $(SPX_DIR)/doom.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
 
-# Copy .spx files to pkg/ repo directories
+# --- Browser (Standard/Extra, only while the network is up) ---
+$(SPX_DIR)/browser.o: $(APPS_DIR)/browser.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/browser_js.o: $(APPS_DIR)/browser_js.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/browser_img.o: $(APPS_DIR)/browser_img.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/browser_jpeg.o: $(APPS_DIR)/browser_jpeg.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/glue_browser.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/browser_spx_stub.o: $(APPS_DIR)/browser_spx.c | $(SPX_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SPX_DIR)/browser.elf: $(SPX_DIR)/browser.o $(SPX_DIR)/browser_js.o $(SPX_DIR)/browser_img.o $(SPX_DIR)/browser_jpeg.o $(SPX_DIR)/glue_browser.o $(SPX_DIR)/browser_spx_stub.o
+	$(LD) -m elf_x86_64 -T $(APPS_DIR)/link_app.ld -nostdlib --defsym BASE=0x03400000 -o $@ $^
+
+$(SPX_DIR)/browser.bin: $(SPX_DIR)/browser.elf
+	$(OBJCOPY) -O binary $< $@
+
+$(SPX_DIR)/browser.spx: $(SPX_DIR)/browser.bin tools/mkspx.py
+	bss=$$(size -A $(SPX_DIR)/browser.elf | awk '$$1 == ".bss" { print $$2 }'); \
+	python3 tools/mkspx.py $< Browser $@ $${bss:-0} 0x03400000
+
+$(SPX_DIR)/browser_spx_embed.o: $(SPX_DIR)/browser.spx
+	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
+
+# Copy every packaged app into its pkg/ directory. These are the exact
+# files the repository serves and `make commit` uploads.
+
+$(PKG_DIR)/terminal/terminal.spx: $(SPX_DIR)/terminal.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/notepad/notepad.spx: $(SPX_DIR)/notepad.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/paint/paint.spx: $(SPX_DIR)/paint.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/settings/settings.spx: $(SPX_DIR)/settings.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/filebrowser/filebrowser.spx: $(SPX_DIR)/filebrowser.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
 $(PKG_DIR)/taskmanager/taskmanager.spx: $(SPX_DIR)/taskmanager.spx
+	@mkdir -p $(dir $@)
 	cp $< $@
 
 $(PKG_DIR)/solpkg/solpkg.spx: $(SPX_DIR)/pkg.spx
+	@mkdir -p $(dir $@)
 	cp $< $@
 
-pkg-spx: $(PKG_DIR)/taskmanager/taskmanager.spx $(PKG_DIR)/solpkg/solpkg.spx
+$(PKG_DIR)/editor/editor.spx: $(SPX_DIR)/editor.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/tetris/tetris.spx: $(SPX_DIR)/tetris.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/blocks/blocks.spx: $(SPX_DIR)/blocks.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/calculator/calculator.spx: $(SPX_DIR)/calculator.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/browser/browser.spx: $(SPX_DIR)/browser.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/doom/doom.spx: $(SPX_DIR)/doom.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(PKG_DIR)/ck3/ck3.spx: $(SPX_DIR)/ck3.spx
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+pkg-spx: $(PKG_DIR)/terminal/terminal.spx $(PKG_DIR)/notepad/notepad.spx $(PKG_DIR)/paint/paint.spx $(PKG_DIR)/settings/settings.spx $(PKG_DIR)/filebrowser/filebrowser.spx $(PKG_DIR)/taskmanager/taskmanager.spx $(PKG_DIR)/solpkg/solpkg.spx $(PKG_DIR)/editor/editor.spx $(PKG_DIR)/tetris/tetris.spx $(PKG_DIR)/blocks/blocks.spx $(PKG_DIR)/calculator/calculator.spx $(PKG_DIR)/browser/browser.spx $(PKG_DIR)/doom/doom.spx $(PKG_DIR)/ck3/ck3.spx
+
+# Publish the built .spx packages to the GitHub repository that hosts
+# them, replacing the old .npx files. Needs GITHUB_TOKEN (or gh).
+commit: pkg-spx
+	python3 tools/npk_commit.py
+
+commit-dry: pkg-spx
+	python3 tools/npk_commit.py --dry-run
 
 # Install the host packages needed to build and run Solis.
 get:

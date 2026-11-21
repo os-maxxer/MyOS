@@ -8,11 +8,12 @@
 #include <solis/net.h>
 #include <solis/setup.h>
 #include <solis/brand.h>
+#include <solis/audio.h>
 
 #define SIDEBAR_W 140
 #define TAB_H 36
 #define COLORS 7
-#define NUM_TABS 6
+#define NUM_TABS 8
 #define HEADER_H 30
 #define SCROLL_STEP 32
 
@@ -20,7 +21,24 @@ static int settings_tab = 0;
 static int sel_color = 0;
 static int hover_tab = -1;
 static int hover_tz = -1;
+static int edition_focus = SETUP_EDITION_DEFAULT;
 static char ping_status[24];
+static char sound_status[32];
+
+static void settings_play_test_tone(void) {
+    if (audio_available()) {
+        audio_play_tone(660, 500);
+        const char *ok = "Tone sent to AC'97";
+        int i = 0;
+        while (ok[i] && i < 31) { sound_status[i] = ok[i]; i++; }
+        sound_status[i] = '\0';
+    } else {
+        const char *no = "No AC'97 device";
+        int i = 0;
+        while (no[i] && i < 31) { sound_status[i] = no[i]; i++; }
+        sound_status[i] = '\0';
+    }
+}
 
 /* The content of the active tab can be taller than the client area (the
  * timezone list alone is 14 rows), so it scrolls. Offsets are per tab so
@@ -93,6 +111,8 @@ static void compute_layout(struct layout *L, int x, int y, int w, int h) {
         case 3: L->content_h = 16 + 22 + 22 + 26 + rtc_get_timezone_count() * 20 + 8; break;
         case 4: L->content_h = 16 + 7 * 24 + 74; break;
         case 5: L->content_h = 30 + 24 + 20 + 20 + 28 + 1 + 12 + 3 * 16 + 8; break;
+        case 6: L->content_h = 38 + 3 * (60 + 6) + 12 + 30 + 30; break;
+        case 7: L->content_h = 30 + 3 * 24 + 40; break;
         default: L->content_h = 0; break;
     }
 
@@ -466,6 +486,125 @@ static void draw_about_tab(const struct layout *L) {
     graphics_draw_string(x + w/2 - 44, py, "Font: 8x16 Bitmap", 0xFF666666);
 }
 
+static int edition_text_width(const char *text) {
+    int width = 0;
+    while (text && *text) {
+        width += 8;
+        text++;
+    }
+    return width;
+}
+
+static const char *edition_name(int edition) {
+    if (edition == SETUP_EDITION_MINIMAL) return "Minimal";
+    if (edition == SETUP_EDITION_STANDARD) return "Standard";
+    return "Extra";
+}
+
+static const char *edition_body(int edition) {
+    if (edition == SETUP_EDITION_MINIMAL) return "The essentials, nothing more.";
+    if (edition == SETUP_EDITION_STANDARD) return "Everything for work and play.";
+    return "The full workshop, with Doom.";
+}
+
+static const char *edition_apps(int edition) {
+    if (edition == SETUP_EDITION_MINIMAL)
+        return "Terminal, Notes, Files, Settings";
+    if (edition == SETUP_EDITION_STANDARD)
+        return "All apps except Doom";
+    return "Every app, including Doom";
+}
+
+static void edition_card_rect(const struct layout *L, int index,
+                              int *x, int *y, int *w, int *h) {
+    *x = L->cx + 14;
+    *y = L->cy + 38 - L->scroll + index * (60 + 6);
+    *w = L->cw - 28;
+    *h = 60;
+}
+
+static void edition_apply_rect(const struct layout *L,
+                               int *x, int *y, int *w, int *h) {
+    *x = L->cx + 14;
+    *y = L->cy + 38 - L->scroll + 3 * (60 + 6) + 12;
+    *w = L->cw - 28;
+    *h = 30;
+}
+
+static void draw_edition_tab(const struct layout *L) {
+    int x = L->cx + 14;
+    int y = L->cy + 4 - L->scroll;
+    int current = setup_edition();
+    int pending = setup_pending_edition();
+
+    graphics_draw_string(x, y, "Installation edition", 0xFFCCCCCC);
+    graphics_draw_string(x, y + 18, "1 2 3 select, Enter queues. Files stay.",
+                         0xFF888888);
+
+    for (int i = 0; i < SETUP_EDITION_COUNT; i++) {
+        int cx, cy, cw, ch;
+        edition_card_rect(L, i, &cx, &cy, &cw, &ch);
+        bool focused = i == edition_focus;
+        uint32_t bg = focused ? 0xFF222F42 : 0xFF1A2230;
+        uint32_t border = i == current ? 0xFF4A90E2
+                          : (focused ? 0xFF607FA8 : 0xFF35445C);
+        graphics_fill_rect(cx, cy, cw, ch, bg);
+        graphics_draw_rect(cx, cy, cw, ch, border);
+
+        if (i == current) {
+            graphics_fill_rect(cx, cy, 4, ch, 0xFF4A90E2);
+        } else if (i == pending) {
+            graphics_fill_rect(cx, cy, 4, ch, 0xFFE4B363);
+        }
+
+        graphics_fill_circle(cx + 20, cy + 20, 10, focused ? 0xFF4A90E2 : 0xFF35445C);
+        char number[2] = {(char)('1' + i), '\0'};
+        graphics_draw_string(cx + 17, cy + 12, number, 0xFFFFFFFF);
+        graphics_draw_string(cx + 38, cy + 6, edition_name(i), 0xFFFFFFFF);
+        graphics_draw_string(cx + 38, cy + 23, edition_body(i), 0xFFB8C4D4);
+        graphics_draw_string(cx + 38, cy + 40, edition_apps(i), 0xFF7F8FA6);
+
+        const char *tag = 0;
+        uint32_t tag_bg = 0;
+        uint32_t tag_fg = 0xFFFFFFFF;
+        if (i == current) {
+            tag = "CURRENT";
+            tag_bg = 0xFF2D5F9E;
+        } else if (i == pending) {
+            tag = "NEXT START";
+            tag_bg = 0xFF7A5A24;
+        }
+        if (tag) {
+            int tw = edition_text_width(tag) + 12;
+            graphics_fill_rect(cx + cw - tw - 10, cy + 10, tw, 18, tag_bg);
+            graphics_draw_string(cx + cw - tw - 4, cy + 11, tag, tag_fg);
+        }
+    }
+
+    int bx, by, bw, bh;
+    edition_apply_rect(L, &bx, &by, &bw, &bh);
+    const char *label;
+    if (pending != current && edition_focus == current)
+        label = "Cancel queued change";
+    else if (edition_focus == current)
+        label = "Current edition selected";
+    else
+        label = "Use selected edition on next start";
+    bool active = edition_focus != current || pending != current;
+    graphics_fill_rect(bx, by, bw, bh, active ? 0xFF315C95 : 0xFF252D3B);
+    graphics_draw_rect(bx, by, bw, bh, active ? 0xFF4A90E2 : 0xFF35445C);
+    graphics_draw_string(bx + (bw - edition_text_width(label)) / 2,
+                         by + 7, label, active ? 0xFFFFFFFF : 0xFF7F8FA6);
+
+    char status[64];
+    int at = 0;
+    append_text(status, &at, "Next start: ", sizeof(status));
+    append_text(status, &at,
+                pending == current ? "no edition change queued"
+                                   : edition_name(pending), sizeof(status));
+    graphics_draw_string(x, by + 32, status, 0xFFB8C4D4);
+}
+
 static void draw_ipv4_value(int x, int y, const uint8_t address[4],
                             uint32_t color) {
     char text[16];
@@ -545,6 +684,33 @@ static void draw_network_tab(const struct layout *L) {
     if (ping_status[0])
         graphics_draw_string(x + 142, by + 5, ping_status,
                              ping_status[0] == 'O' ? 0xFF75D6A0 : 0xFFF08A80);
+}
+
+static void draw_sound_tab(const struct layout *L) {
+    int x = L->cx;
+    int py = L->cy + 18 - L->scroll;
+    int available = audio_available();
+    graphics_draw_string(x + 12, py, "Audio Output", 0xFFCCCCCC);
+    py += 28;
+    graphics_draw_string(x + 12, py, "Driver:", 0xFF888888);
+    graphics_draw_string(x + 100, py,
+                         available ? "AC'97 PCM out" : "No AC'97 device",
+                         available ? 0xFF75D6A0 : 0xFFF08A80);
+    py += 24;
+    graphics_draw_string(x + 12, py, "Format:", 0xFF888888);
+    graphics_draw_string(x + 100, py, "48 kHz stereo, 16-bit", 0xFFCCCCCC);
+    py += 24;
+    graphics_draw_string(x + 12, py, "Use this button to verify the", 0xFF888888);
+    py += 18;
+    graphics_draw_string(x + 12, py, "codec and VM audio output.", 0xFF888888);
+
+    int by = L->cy + 18 - L->scroll + 3 * 24 + 30;
+    graphics_fill_rect(x + 12, by, 160, 30, 0xFF354E72);
+    graphics_draw_rect(x + 12, by, 160, 30, 0xFF596DE8);
+    graphics_draw_string(x + 24, by + 7, "Play test tone", 0xFFFFFFFF);
+    if (sound_status[0])
+        graphics_draw_string(x + 184, by + 7, sound_status,
+                             available ? 0xFF75D6A0 : 0xFFF08A80);
 }
 
 static void append_str(char *buf, int *idx, const char *s) {
@@ -646,7 +812,9 @@ void settings_init(void) {
     sel_color = 0;
     hover_tab = -1;
     hover_tz = -1;
+    edition_focus = setup_pending_edition();
     for (int i = 0; i < NUM_TABS; i++) tab_scroll[i] = 0;
+    sound_status[0] = '\0';
 }
 
 void settings_draw(int x, int y, int w, int h) {
@@ -656,7 +824,7 @@ void settings_draw(int x, int y, int w, int h) {
     graphics_fill_rect(x + SIDEBAR_W, y, 1, h, 0xFF3A3A3A);
 
     const char *tabs[] = {"Appearance", "System", "Display", "Time & Date",
-                          "Network", "About"};
+                          "Network", "About", "Edition", "Sound"};
     int ntabs = NUM_TABS;
     for (int i = 0; i < ntabs; i++) {
         int ty = y + 8 + i * TAB_H;
@@ -687,6 +855,8 @@ void settings_draw(int x, int y, int w, int h) {
         case 3: draw_time_tab(&L); break;
         case 4: draw_network_tab(&L); break;
         case 5: draw_about_tab(&L); break;
+        case 6: draw_edition_tab(&L); break;
+        case 7: draw_sound_tab(&L); break;
     }
 
     /* Scrollbar, only when the content actually overflows. Drawn over the
@@ -718,7 +888,21 @@ void settings_handle_scroll(int x, int y, int w, int h, int notches) {
 void settings_handle_key(char key) {
     if (key == '\t') {
         settings_tab = (settings_tab + 1) % NUM_TABS;
+        edition_focus = setup_pending_edition();
+        return;
     }
+    if (settings_tab == 6) {
+        if (key >= '1' && key <= '3') {
+            edition_focus = key - '1';
+            return;
+        }
+        if (key == '\n' || key == '\r') {
+            setup_request_edition(edition_focus);
+            return;
+        }
+    }
+    if (settings_tab == 7 && (key == '\n' || key == '\r'))
+        settings_play_test_tone();
 }
 
 void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y) {
@@ -731,6 +915,7 @@ void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y)
             mouse_y >= ty && mouse_y < ty + TAB_H - 4) {
             hover_tab = i;
             settings_tab = i;
+            edition_focus = setup_pending_edition();
             return;
         }
     }
@@ -792,6 +977,30 @@ void settings_handle_mouse(int x, int y, int w, int h, int mouse_x, int mouse_y)
                 const char *fail = "No reply";
                 for (int i = 0; fail[i]; i++) ping_status[i] = fail[i];
             }
+            return;
+        }
+    } else if (settings_tab == 7) {
+        int by = L.cy + 18 - L.scroll + 3 * 24 + 30;
+        if (mouse_x >= L.cx + 12 && mouse_x < L.cx + 172 &&
+            mouse_y >= by && mouse_y < by + 30) {
+            settings_play_test_tone();
+            return;
+        }
+    } else if (settings_tab == 6) {
+        for (int i = 0; i < SETUP_EDITION_COUNT; i++) {
+            int cx, cy, cw, ch;
+            edition_card_rect(&L, i, &cx, &cy, &cw, &ch);
+            if (mouse_x >= cx && mouse_x < cx + cw &&
+                mouse_y >= cy && mouse_y < cy + ch) {
+                edition_focus = i;
+                return;
+            }
+        }
+        int bx, by, bw, bh;
+        edition_apply_rect(&L, &bx, &by, &bw, &bh);
+        if (mouse_x >= bx && mouse_x < bx + bw &&
+            mouse_y >= by && mouse_y < by + bh) {
+            setup_request_edition(edition_focus);
             return;
         }
     }

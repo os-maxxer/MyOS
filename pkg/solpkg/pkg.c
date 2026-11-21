@@ -1,4 +1,5 @@
 #include <solis/graphics.h>
+#include <solis/gui.h>
 #include <solis/spx.h>
 #include <solis/solfs.h>
 #include <solis/vfs.h>
@@ -8,6 +9,8 @@
 #define LINE_H 16
 #define COLS 60
 #define LINE_BUF 256
+#define MAX_REPO_PKGS 16
+#define PKG_BUF_SIZE (1024 * 1024)
 
 static char lines[32][COLS];
 static int line_count;
@@ -16,8 +19,44 @@ static bool dirty;
 static char line_buf[LINE_BUF];
 static int line_pos;
 
+/* One package buffer for disk installs and downloads. Packages are flat
+ * images up to a full SPX slot, so a 64 KiB buffer silently rejected every
+ * real app; the slot this manager runs in leaves room for 1 MiB. */
+static uint8_t pkg_buf[PKG_BUF_SIZE];
+
+struct repo_entry {
+    char name[24];
+    char version[12];
+    char desc[44];
+    char file[64];
+    int  slot;
+};
+
+static struct repo_entry repo_pkgs[MAX_REPO_PKGS];
+static int repo_pkg_count;
+static bool repo_loaded;
+
 static int str_eq(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+static char lower(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+/* Package names differ between the manifest ("taskmanager"), the export
+ * table ("Task Manager") and the file name. Compare loosely. */
+static int name_equiv(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = lower(*a), cb = lower(*b);
+        if (ca == ' ' || ca == '_' || ca == '-') { a++; continue; }
+        if (cb == ' ' || cb == '_' || cb == '-') { b++; continue; }
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    while (*a == ' ' || *a == '_' || *a == '-') a++;
+    while (*b == ' ' || *b == '_' || *b == '-') b++;
     return *a == *b;
 }
 
@@ -29,7 +68,12 @@ static void clear_screen(void) {
 }
 
 static void add_line(const char *s) {
-    if (line_count >= 32) return;
+    if (line_count >= 32) {
+        for (int i = 0; i < 31; i++)
+            for (int j = 0; j < COLS; j++)
+                lines[i][j] = lines[i + 1][j];
+        line_count = 31;
+    }
     int i = 0;
     while (*s && i < COLS - 1)
         lines[line_count][i++] = *s++;
@@ -39,14 +83,27 @@ static void add_line(const char *s) {
     line_count++;
 }
 
-static void uint32_to_str(uint32_t n, char *buf) {
+/* Small append-oriented string builder, so messages can mix literals and
+ * numbers without a printf. */
+struct sbuf { char *buf; int len; int max; };
+
+static void sb_init(struct sbuf *b, char *buf, int max) {
+    b->buf = buf; b->len = 0; b->max = max;
+    if (max > 0) buf[0] = '\0';
+}
+
+static void sb_str(struct sbuf *b, const char *s) {
+    while (*s && b->len < b->max - 1) b->buf[b->len++] = *s++;
+    b->buf[b->len] = '\0';
+}
+
+static void sb_num(struct sbuf *b, uint32_t n) {
     char tmp[12];
     int ti = 0;
-    if (n == 0) { tmp[ti++] = '0'; }
-    while (n > 0) { tmp[ti++] = '0' + (n % 10); n /= 10; }
-    int bi = 0;
-    while (ti > 0) buf[bi++] = tmp[--ti];
-    buf[bi] = '\0';
+    if (n == 0) tmp[ti++] = '0';
+    while (n > 0) { tmp[ti++] = (char)('0' + (n % 10)); n /= 10; }
+    while (ti > 0 && b->len < b->max - 1) b->buf[b->len++] = tmp[--ti];
+    b->buf[b->len] = '\0';
 }
 
 static void prompt(void) {
@@ -58,6 +115,7 @@ static uint16_t repo_port = 8000;
 static char repo_host[64] = "";
 static char repo_host_str[64] = "10.0.2.2";
 static int repo_has_hostname = 0;
+static char repo_prefix[64] = "";
 
 static void ip_to_str(const uint8_t *ip, char *buf) {
     int bi = 0;
@@ -66,7 +124,7 @@ static void ip_to_str(const uint8_t *ip, char *buf) {
         char tmp[4];
         int ti = 0;
         if (n == 0) { tmp[ti++] = '0'; }
-        while (n > 0) { tmp[ti++] = '0' + (n % 10); n /= 10; }
+        while (n > 0) { tmp[ti++] = (char)('0' + (n % 10)); n /= 10; }
         while (ti > 0) buf[bi++] = tmp[--ti];
         if (i < 3) buf[bi++] = '.';
     }
@@ -101,55 +159,340 @@ static int parse_ip(const char *s, uint8_t *ip) {
 }
 
 static void print_help(void) {
-    add_line("SOLPKG v1.0 - Solis Package Manager");
+    add_line("SOLPKG 1.1 - Solis Package Manager");
     add_line("");
-    add_line("Commands:");
-    add_line("  help                  - show this help");
-    add_line("  search [term]         - list installed packages");
-    add_line("  install <file>        - install a .spx package from disk");
-    add_line("  purge <name>          - uninstall a package by name");
-    add_line("  local-list            - list packages on local disk");
-    add_line("  local-install <name>  - install a package from local disk");
-    add_line("  repo add <url>        - set repo (e.g. http://10.0.2.2:8000)");
-    add_line("  repo-list             - list packages from repo");
-    add_line("  fetch <name>          - download and install from repo");
-    add_line("  clear                 - clear screen");
+    add_line("Packages:");
+    add_line("  search [term]       installed + repo packages");
+    add_line("  install <file.spx>  install a package from disk");
+    add_line("  local-list          list .spx files on disk");
+    add_line("  local-install <n>   install <n>.spx from disk");
+    add_line("  purge <name>        uninstall a package");
+    add_line("  upgrade             reinstall every installed pkg");
+    add_line("");
+    add_line("Repository:");
+    add_line("  repo add <url>      set repo, e.g. http://10.0.2.2:8000");
+    add_line("  repo-list           show packages in the repo");
+    add_line("  fetch <name>        download and install a package");
+    add_line("");
+    add_line("  clear               clear the screen");
+    add_line("  help                show this help");
     add_line("");
 }
 
-static void cmd_local_list(const char *arg) {
-    (void)arg;
-    int fd = vfs_open("/repo.json");
-    if (fd < 0) {
-        fd = vfs_open("repo.json");
-        if (fd < 0) {
-            add_line("No local repo found on disk.");
+/* ------------------------------------------------------------------ */
+/* Minimal JSON reading                                                */
+/* ------------------------------------------------------------------ */
+
+static const char *json_skip_ws(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    return p;
+}
+
+/* Find "key" at object depth 1 inside [obj, end) and return the pointer to
+ * the value that follows the colon. Strings are skipped so a description
+ * containing a key name cannot confuse the search. */
+static const char *json_value(const char *obj, const char *end, const char *key) {
+    const char *p = obj;
+    int depth = 0;
+    int key_len = 0;
+    while (key[key_len]) key_len++;
+    while (p < end) {
+        char c = *p;
+        if (c == '"') {
+            const char *s = ++p;
+            while (p < end && *p != '"') {
+                if (*p == '\\' && p + 1 < end) p++;
+                p++;
+            }
+            if (p >= end) return 0;
+            int len = (int)(p - s);
+            p++;
+            if (depth == 1 && len == key_len) {
+                int match = 1;
+                for (int i = 0; i < len; i++)
+                    if (s[i] != key[i]) { match = 0; break; }
+                if (match) {
+                    const char *v = json_skip_ws(p);
+                    if (v < end && *v == ':') return json_skip_ws(v + 1);
+                }
+            }
+            continue;
+        }
+        if (c == '{' || c == '[') depth++;
+        else if (c == '}' || c == ']') {
+            depth--;
+            if (depth <= 0) return 0;
+        }
+        p++;
+    }
+    return 0;
+}
+
+static int json_str(const char *obj, const char *end, const char *key,
+                    char *out, int max) {
+    const char *p = json_value(obj, end, key);
+    if (!p || p >= end || *p != '"') return 0;
+    p++;
+    int n = 0;
+    while (p < end && *p != '"') {
+        char c = *p++;
+        if (c == '\\' && p < end) {
+            c = *p++;
+            if (c == 'n' || c == 'r' || c == 't') c = ' ';
+        }
+        if (n < max - 1) out[n++] = c;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+static int json_int(const char *obj, const char *end, const char *key, int def) {
+    const char *p = json_value(obj, end, key);
+    if (!p || p >= end) return def;
+    int value = 0, digits = 0;
+    while (p < end && *p >= '0' && *p <= '9') {
+        value = value * 10 + (*p - '0');
+        p++; digits++;
+    }
+    return digits ? value : def;
+}
+
+/* Fill repo_pkgs from a repo.json body. Returns the number of entries. */
+static int parse_manifest(const char *json, int len) {
+    repo_pkg_count = 0;
+    repo_loaded = false;
+    const char *end = json + len;
+    const char *p = json_value(json, end, "packages");
+    if (!p || p >= end || *p != '[') return 0;
+    p++;
+    while (p < end && repo_pkg_count < MAX_REPO_PKGS) {
+        p = json_skip_ws(p);
+        if (p >= end || *p == ']') break;
+        if (*p != '{') { p++; continue; }
+        const char *obj = p;
+        const char *q = p + 1;
+        int depth = 1;
+        while (q < end && depth > 0) {
+            if (*q == '"') {
+                q++;
+                while (q < end && *q != '"') {
+                    if (*q == '\\' && q + 1 < end) q++;
+                    q++;
+                }
+                if (q < end) q++;
+                continue;
+            }
+            if (*q == '{') depth++;
+            else if (*q == '}') depth--;
+            q++;
+        }
+        if (depth != 0) break;
+        struct repo_entry *e = &repo_pkgs[repo_pkg_count];
+        if (!json_str(obj, q, "name", e->name, sizeof(e->name))) {
+            p = q;
+            continue;
+        }
+        if (!json_str(obj, q, "version", e->version, sizeof(e->version)))
+            e->version[0] = '\0';
+        if (!json_str(obj, q, "description", e->desc, sizeof(e->desc)))
+            e->desc[0] = '\0';
+        if (!json_str(obj, q, "file", e->file, sizeof(e->file))) {
+            /* The manifest may omit the path; default to <name>.spx. */
+            int n = 0;
+            while (e->name[n] && n < (int)sizeof(e->file) - 5) {
+                e->file[n] = e->name[n];
+                n++;
+            }
+            e->file[n++] = '.'; e->file[n++] = 's'; e->file[n++] = 'p';
+            e->file[n++] = 'x'; e->file[n] = '\0';
+        }
+        e->slot = json_int(obj, q, "slot", -1);
+        repo_pkg_count++;
+        p = q;
+        p = json_skip_ws(p);
+        if (p < end && *p == ',') p++;
+    }
+    repo_loaded = repo_pkg_count > 0;
+    return repo_pkg_count;
+}
+
+static int fetch_manifest(void) {
+    if (!net_available()) {
+        add_line("Network not available.");
+        return -1;
+    }
+    if (repo_resolve() < 0) {
+        add_line("Failed to resolve the repo hostname.");
+        return -1;
+    }
+    char path[96];
+    int pi = 0;
+    if (repo_prefix[0]) {
+        path[pi++] = '/';
+        for (int i = 0; repo_prefix[i] && pi < 80; i++) path[pi++] = repo_prefix[i];
+    }
+    const char *j = "/repo.json";
+    while (*j && pi < 90) path[pi++] = *j++;
+    path[pi] = '\0';
+
+    int n = net_http_get(repo_ip, repo_port, repo_host_str, path,
+                         pkg_buf, 65535);
+    if (n <= 0) return -1;
+    pkg_buf[n] = '\0';
+    return parse_manifest((const char *)pkg_buf, n);
+}
+
+static struct repo_entry *find_repo_pkg(const char *name) {
+    for (int i = 0; i < repo_pkg_count; i++)
+        if (name_equiv(repo_pkgs[i].name, name)) return &repo_pkgs[i];
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Install helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+static void report_install_error(int rv, const char *what, int slot) {
+    char msg[64];
+    struct sbuf b;
+    sb_init(&b, msg, sizeof(msg));
+    sb_str(&b, what);
+    if (rv == SPX_ERR_BUSY) {
+        if (slot < 0) {
+            sb_str(&b, ": no free slot.");
+            add_line(msg);
+            add_line("Purge an app to make room.");
             return;
         }
+        sb_str(&b, ": slot ");
+        sb_num(&b, (uint32_t)slot);
+        sb_str(&b, " is occupied.");
+        add_line(msg);
+        if (slot >= 0) {
+            const struct app_exports *e = spx_get_exports(slot);
+            if (e && e->name) {
+                char owner[64];
+                struct sbuf o;
+                sb_init(&o, owner, sizeof(owner));
+                sb_str(&o, "Running there: ");
+                sb_str(&o, e->name);
+                add_line(owner);
+            }
+        }
+        add_line("Purge that app first, then retry.");
+    } else if (rv == SPX_ERR_BASE) {
+        sb_str(&b, ": not linked for any SPX slot.");
+        add_line(msg);
+    } else if (rv == SPX_ERR_BAD) {
+        sb_str(&b, ": malformed or too large.");
+        add_line(msg);
+    } else {
+        sb_str(&b, ": no free slot for an unpinned package.");
+        add_line(msg);
+        add_line("Purge an app to make room.");
     }
-    int size = vfs_get_size(fd);
-    if (size <= 0) {
-        add_line("Local repo is empty.");
-        return;
+}
+
+static int install_buffer(uint32_t size, const char *label) {
+    if (size < sizeof(struct spx_header)) {
+        add_line("Not an SPX package (too small).");
+        return -1;
     }
-    uint8_t buf[2048];
-    int n = vfs_read(fd, buf, 2048);
-    if (n <= 0) {
-        add_line("Failed to read local repo.");
-        return;
+    const struct spx_header *hdr = (const struct spx_header *)pkg_buf;
+    if (hdr->magic != SPX_MAGIC) {
+        add_line("Not an SPX package (bad magic).");
+        return -1;
     }
-    buf[n] = '\0';
-    add_line("--- Local Packages ---");
-    char *line = (char *)buf;
-    while (*line) {
-        char lbuf[60];
-        int bi = 0;
-        while (*line && *line != '\n' && bi < 58) lbuf[bi++] = *line++;
-        if (*line == '\n') line++;
-        lbuf[bi] = '\0';
-        if (bi > 0) add_line(lbuf);
+
+    /* Never overwrite the slot this manager is executing from. */
+    int self = spx_find_slot("SOLPKG");
+    int target = -1;
+    if (hdr->version >= 3 && hdr->load_base)
+        target = spx_slot_for_base(hdr->load_base);
+    if (self >= 0 && target == self) {
+        add_line("Refusing to replace the running SOLPKG.");
+        return -1;
     }
+    /* Replacing bytes under a live window would fault the running app; the
+     * user can close it and retry. */
+    if (target >= 0 && gui_app_window(target) >= 0) {
+        const struct app_exports *e = spx_get_exports(target);
+        if (e && e->name) {
+            char msg[64];
+            struct sbuf b;
+            sb_init(&b, msg, sizeof(msg));
+            sb_str(&b, "Close ");
+            sb_str(&b, e->name);
+            sb_str(&b, " before installing.");
+            add_line(msg);
+        } else {
+            add_line("Close the app in that slot first.");
+        }
+        return -1;
+    }
+
+    add_line("Installing...");
+    int slot = spx_install(pkg_buf, size);
+    if (slot < 0) {
+        report_install_error(slot, "Install failed", target);
+        return -1;
+    }
+
+    char msg[64];
+    struct sbuf b;
+    sb_init(&b, msg, sizeof(msg));
+    sb_str(&b, "Installed ");
+    sb_str(&b, label ? label : "package");
+    sb_str(&b, " in slot ");
+    sb_num(&b, (uint32_t)slot);
+    add_line(msg);
+    add_line("Launch it from the desktop or Start menu.");
+    return slot;
+}
+
+/* ------------------------------------------------------------------ */
+/* Commands                                                            */
+/* ------------------------------------------------------------------ */
+
+static void cmd_local_list(void) {
+    char names[32][24];
+    int count = vfs_ls(names, 32);
+    int shown = 0;
+    add_line("--- Local packages (.spx) ---");
+    for (int i = 0; i < count; i++) {
+        int n = 0;
+        while (names[i][n]) n++;
+        if (n < 4) continue;
+        if (!(names[i][n - 4] == '.' &&
+              (names[i][n - 3] == 's' || names[i][n - 3] == 'S') &&
+              (names[i][n - 2] == 'p' || names[i][n - 2] == 'P') &&
+              (names[i][n - 1] == 'x' || names[i][n - 1] == 'X')))
+            continue;
+        add_line(names[i]);
+        shown++;
+    }
+    if (shown == 0)
+        add_line("No .spx files here. Use 'local-install <name>'.");
     add_line("--- End ---");
+}
+
+/* Returns 1 when the file existed (whether or not the install succeeded)
+ * and 0 when the path could not be opened, so callers can try a fallback. */
+static int read_package_file(const char *path, const char *label) {
+    int fd = vfs_open(path);
+    if (fd < 0) return 0;
+    int size = vfs_get_size(fd);
+    if (size <= 0 || size > PKG_BUF_SIZE) {
+        add_line("Invalid package size (max 1 MiB).");
+        return 1;
+    }
+    int n = vfs_read(fd, pkg_buf, (uint32_t)size);
+    if (n <= 0) {
+        add_line("Failed to read the package.");
+        return 1;
+    }
+    install_buffer((uint32_t)n, label);
+    return 1;
 }
 
 static void cmd_local_install(const char *name) {
@@ -157,61 +500,33 @@ static void cmd_local_install(const char *name) {
         add_line("Usage: local-install <name>");
         return;
     }
-    char fname[32];
-    int fi = 0;
+    char path[64];
+    int pi = 0;
+    path[pi++] = '/';
     const char *n = name;
-    while (*n && fi < 27) fname[fi++] = *n++;
-    fname[fi++] = '.'; fname[fi++] = 'n'; fname[fi++] = 'p'; fname[fi++] = 'x';
-    fname[fi] = '\0';
+    while (*n && pi < 40) path[pi++] = *n++;
+    path[pi++] = '.'; path[pi++] = 's'; path[pi++] = 'p'; path[pi++] = 'x';
+    path[pi] = '\0';
+    if (read_package_file(path, name)) return;
 
-    char fpath[64];
-    fi = 0;
-    fpath[fi++] = '/';
+    /* Also accept a package directory: /<name>/<name>.spx */
+    pi = 0;
+    path[pi++] = '/';
     n = name;
-    while (*n && fi < 62) fpath[fi++] = *n++;
-    fpath[fi++] = '.'; fpath[fi++] = 'n'; fpath[fi++] = 'p'; fpath[fi++] = 'x';
-    fpath[fi] = '\0';
+    while (*n && pi < 24) path[pi++] = *n++;
+    path[pi++] = '/';
+    n = name;
+    while (*n && pi < 40) path[pi++] = *n++;
+    path[pi++] = '.'; path[pi++] = 's'; path[pi++] = 'p'; path[pi++] = 'x';
+    path[pi] = '\0';
+    if (read_package_file(path, name)) return;
 
-    int fd = vfs_open(fpath);
-    if (fd < 0) {
-        fd = vfs_open(fname);
-        if (fd < 0) {
-            add_line("Package file not found on disk.");
-            return;
-        }
-    }
-    int size = vfs_get_size(fd);
-    if (size <= 0 || size > 65536) {
-        add_line("Invalid package size.");
-        return;
-    }
-    uint8_t buf[65536];
-    int nread = vfs_read(fd, buf, (uint32_t)size);
-    if (nread <= 0) {
-        add_line("Failed to read package.");
-        return;
-    }
-    add_line("Installing...");
-    int slot = spx_install(buf, (uint32_t)nread);
-    if (slot < 0) {
-        add_line("Install failed (no free slots or bad package).");
-        return;
-    }
-    {
-        char msg[64];
-        int bi = 0;
-        const char *p = "Installed from disk: ";
-        while (*p) msg[bi++] = *p++;
-        p = name;
-        while (*p && bi < 56) msg[bi++] = *p++;
-        msg[bi] = '\0';
-        add_line(msg);
-    }
+    add_line("Package file not found on disk.");
 }
 
 static void cmd_repo_add(const char *url) {
     if (!url || !*url) {
-        add_line("Usage: repo add http://hostname:port");
+        add_line("Usage: repo add http://hostname:port[/prefix]");
         return;
     }
 
@@ -221,7 +536,7 @@ static void cmd_repo_add(const char *url) {
 
     if (url[0] != 'h' || url[1] != 't' || url[2] != 't' || url[3] != 'p' ||
         url[4] != ':' || url[5] != '/' || url[6] != '/') {
-        add_line("Only http:// URLs supported.");
+        add_line("Only http:// URLs are supported.");
         return;
     }
     url += 7;
@@ -247,6 +562,16 @@ static void cmd_repo_add(const char *url) {
     }
     repo_port = (uint16_t)port;
 
+    repo_prefix[0] = '\0';
+    if (*p == '/') {
+        p++;
+        int pi = 0;
+        while (*p && pi < 63) repo_prefix[pi++] = *p++;
+        /* Drop a trailing slash so path joins stay predictable. */
+        while (pi > 0 && repo_prefix[pi - 1] == '/') pi--;
+        repo_prefix[pi] = '\0';
+    }
+
     if (parse_ip(repo_host, repo_ip) == 0) {
         repo_has_hostname = 0;
     } else {
@@ -256,53 +581,112 @@ static void cmd_repo_add(const char *url) {
             return;
         }
     }
+    repo_loaded = false;
+    repo_pkg_count = 0;
 
-    {
-        char msg[64];
-        int bi = 0;
-        const char *s = "Repo: ";
-        while (*s) msg[bi++] = *s++;
-        s = repo_host;
-        while (*s && bi < 50) msg[bi++] = *s++;
-        msg[bi++] = ':';
-        char pt[8];
-        uint32_to_str(repo_port, pt);
-        s = pt;
-        while (*s && bi < 62) msg[bi++] = *s++;
-        msg[bi] = '\0';
-        add_line(msg);
-    }
+    char msg[64];
+    struct sbuf b;
+    sb_init(&b, msg, sizeof(msg));
+    sb_str(&b, "Repo: ");
+    sb_str(&b, repo_host);
+    sb_str(&b, ":");
+    sb_num(&b, repo_port);
+    if (repo_prefix[0]) { sb_str(&b, "/"); sb_str(&b, repo_prefix); }
+    add_line(msg);
 }
 
 static void cmd_repo_list(const char *arg) {
     (void)arg;
-    if (!net_available()) {
-        add_line("Network not available.");
+    add_line("Fetching repo index...");
+    int count = fetch_manifest();
+    if (count <= 0) {
+        add_line("Could not read repo.json.");
+        add_line("Set one with: repo add http://10.0.2.2:8000");
         return;
     }
-    add_line("Fetching repo list...");
-    if (repo_resolve() < 0) {
-        add_line("Failed to resolve repo hostname.");
-        return;
-    }
-    uint8_t resp[4096];
-    int n = net_http_get(repo_ip, repo_port, repo_host_str, "/repo.json", resp, 4096);
-    if (n <= 0) {
-        add_line("Connection failed. Set repo with: repo add http://host:port");
-        return;
-    }
-    resp[n] = '\0';
-    add_line("--- Available Packages ---");
-    char *line = (char *)resp;
-    while (*line) {
-        char buf[60];
-        int bi = 0;
-        while (*line && *line != '\n' && bi < 58) buf[bi++] = *line++;
-        if (*line == '\n') line++;
-        buf[bi] = '\0';
-        if (bi > 0) add_line(buf);
+    add_line("--- Available packages ---");
+    for (int i = 0; i < count; i++) {
+        struct repo_entry *e = &repo_pkgs[i];
+        char line[COLS];
+        struct sbuf b;
+        sb_init(&b, line, sizeof(line));
+        sb_str(&b, e->name[0] ? e->name : "?");
+        if (e->version[0]) { sb_str(&b, " "); sb_str(&b, e->version); }
+        add_line(line);
+        if (e->desc[0]) {
+            char desc[COLS];
+            struct sbuf d;
+            sb_init(&d, desc, sizeof(desc));
+            sb_str(&d, "  ");
+            sb_str(&d, e->desc);
+            add_line(desc);
+        }
     }
     add_line("--- End ---");
+}
+
+static void cmd_search(const char *term) {
+    char names[SPX_MAX_APPS][SPX_NAME_LEN];
+    int count = spx_list_installed(names, SPX_MAX_APPS);
+    while (*term == ' ') term++;
+
+    add_line("--- Installed ---");
+    int shown = 0;
+    for (int i = 0; i < count; i++) {
+        int slot = spx_find_slot(names[i]);
+        char line[COLS];
+        struct sbuf b;
+        sb_init(&b, line, sizeof(line));
+        sb_str(&b, "  ");
+        sb_str(&b, names[i]);
+        sb_str(&b, " (slot ");
+        sb_num(&b, (uint32_t)slot);
+        sb_str(&b, ")");
+        if (*term && !name_equiv(names[i], term) && *term) {
+            /* Substring filter, case-insensitive. */
+            int found = 0;
+            for (int a = 0; names[i][a] && !found; a++) {
+                int k = 0;
+                while (term[k] && names[i][a + k] &&
+                       lower(names[i][a + k]) == lower(term[k])) k++;
+                if (!term[k]) found = 1;
+            }
+            if (!found) continue;
+        }
+        add_line(line);
+        shown++;
+    }
+    if (!shown) add_line("  (none)");
+
+    if (!repo_loaded) {
+        add_line("--- Repo (run repo-list first) ---");
+        return;
+    }
+    add_line("--- Repository ---");
+    shown = 0;
+    for (int i = 0; i < repo_pkg_count; i++) {
+        struct repo_entry *e = &repo_pkgs[i];
+        if (*term) {
+            int found = 0;
+            for (int a = 0; e->name[a] && !found; a++) {
+                int k = 0;
+                while (term[k] && e->name[a + k] &&
+                       lower(e->name[a + k]) == lower(term[k])) k++;
+                if (!term[k]) found = 1;
+            }
+            if (!found) continue;
+        }
+        char line[COLS];
+        struct sbuf b;
+        sb_init(&b, line, sizeof(line));
+        sb_str(&b, "  ");
+        sb_str(&b, e->name);
+        sb_str(&b, " ");
+        sb_str(&b, e->version);
+        add_line(line);
+        shown++;
+    }
+    if (!shown) add_line("  (no match)");
 }
 
 static void cmd_fetch(const char *name) {
@@ -310,166 +694,84 @@ static void cmd_fetch(const char *name) {
         add_line("Usage: fetch <name>");
         return;
     }
+    while (*name == ' ') name++;
     if (!net_available()) {
         add_line("Network not available.");
         return;
     }
-
+    if (!repo_loaded && fetch_manifest() <= 0) {
+        add_line("Could not read repo.json.");
+        return;
+    }
+    struct repo_entry *e = find_repo_pkg(name);
+    if (!e) {
+        add_line("No such package in the repo.");
+        add_line("Run 'repo-list' to see what is available.");
+        return;
+    }
     if (repo_resolve() < 0) {
-        add_line("Failed to resolve repo hostname.");
+        add_line("Failed to resolve the repo hostname.");
         return;
     }
 
     char path[128];
     int pi = 0;
+    if (repo_prefix[0]) {
+        path[pi++] = '/';
+        for (int i = 0; repo_prefix[i] && pi < 60; i++) path[pi++] = repo_prefix[i];
+    }
     path[pi++] = '/';
-    const char *n = name;
-    while (*n && pi < 110) path[pi++] = *n++;
-    path[pi++] = '/';
-    n = name;
-    while (*n && pi < 120) path[pi++] = *n++;
-    path[pi++] = '.'; path[pi++] = 'n'; path[pi++] = 'p'; path[pi++] = 'x';
+    for (int i = 0; e->file[i] && pi < 120; i++) {
+        path[pi++] = (e->file[i] == '\\') ? '/' : e->file[i];
+    }
     path[pi] = '\0';
 
-    {
-        char msg[64];
-        int bi = 0;
-        const char *p = "Downloading ";
-        while (*p) msg[bi++] = *p++;
-        p = name;
-        while (*p && bi < 56) msg[bi++] = *p++;
-        msg[bi] = '\0';
-        add_line(msg);
-    }
+    char msg[64];
+    struct sbuf b;
+    sb_init(&b, msg, sizeof(msg));
+    sb_str(&b, "Downloading ");
+    sb_str(&b, e->name);
+    add_line(msg);
 
-    uint8_t resp[16384];
-    int n_bytes = net_http_get(repo_ip, repo_port, repo_host_str, path, resp, 16384);
-    if (n_bytes <= 0) {
+    int n = net_http_get(repo_ip, repo_port, repo_host_str, path,
+                         pkg_buf, PKG_BUF_SIZE - 1);
+    if (n <= 0) {
         add_line("Download failed.");
+        add_line("Check that the repo serves this file.");
         return;
     }
-
-    add_line("Installing...");
-    int slot = spx_install(resp, (uint32_t)n_bytes);
-    if (slot < 0) {
-        add_line("Install failed (no free slots or bad package).");
+    if (n >= PKG_BUF_SIZE - 1) {
+        add_line("Download too large (1 MiB limit).");
         return;
     }
-
-    {
-        char msg[64];
-        int bi = 0;
-        const char *p = "Installed ";
-        while (*p) msg[bi++] = *p++;
-        p = name;
-        while (*p && bi < 56) msg[bi++] = *p++;
-        msg[bi] = '\0';
-        add_line(msg);
-    }
+    install_buffer((uint32_t)n, e->name);
 }
 
-static void cmd_search(const char *arg) {
+static void cmd_upgrade(const char *arg) {
     (void)arg;
-    char names[SPX_MAX_APPS][SPX_NAME_LEN];
-    int count = spx_list_installed(names, SPX_MAX_APPS);
-
-    if (count == 0) {
-        add_line("No packages installed.");
+    if (!repo_loaded && fetch_manifest() <= 0) {
+        add_line("Could not read repo.json.");
         return;
     }
-
-    char buf[64];
-    int bi;
-
-    add_line("Installed packages:");
-    for (int i = 0; i < count; i++) {
-        int slot = spx_find_slot(names[i]);
-        bi = 0;
-        buf[bi++] = ' ';
-        buf[bi++] = ' ';
-        const char *s = names[i];
-        while (*s && bi < 40) buf[bi++] = *s++;
-        const char *p = " (slot ";
-        while (*p && bi < 60) buf[bi++] = *p++;
-        char slot_str[4];
-        uint32_to_str((uint32_t)slot, slot_str);
-        const char *q = slot_str;
-        while (*q && bi < 60) buf[bi++] = *q++;
-        buf[bi++] = ')';
-        buf[bi] = '\0';
-        add_line(buf);
+    int done = 0;
+    for (int i = 0; i < repo_pkg_count; i++) {
+        struct repo_entry *e = &repo_pkgs[i];
+        if (spx_find_slot(e->name) < 0) continue;
+        if (e->slot >= 0 && spx_get_exports(e->slot) == 0) continue;
+        cmd_fetch(e->name);
+        done++;
     }
-
-    if (count == 1)
-        add_line("1 package total.");
-    else {
-        char total[32];
-        uint32_to_str((uint32_t)count, total);
-        bi = 0;
-        const char *p = total;
-        while (*p) buf[bi++] = *p++;
-        const char *q = " packages total.";
-        while (*q && bi < 60) buf[bi++] = *q++;
-        buf[bi] = '\0';
-        add_line(buf);
-    }
+    if (!done) add_line("Nothing installed from the repo to upgrade.");
 }
 
 static void cmd_install(const char *path) {
     if (!path || !*path) {
-        add_line("Usage: install <filename>");
+        add_line("Usage: install <filename.spx>");
         return;
     }
-
     add_line("Reading package from disk...");
-
-    int fd = vfs_open(path);
-    if (fd < 0) {
-        add_line("Error: file not found.");
-        return;
-    }
-
-    int size = vfs_get_size(fd);
-    if (size <= 0 || size > 65536) {
-        add_line("Error: invalid or too large.");
-        return;
-    }
-
-    uint8_t buf[65536];
-    int n = vfs_read(fd, buf, (uint32_t)size);
-    if (n <= 0) {
-        add_line("Error: could not read file.");
-        return;
-    }
-
-    add_line("Installing...");
-    int slot = spx_install(buf, (uint32_t)n);
-    if (slot < 0) {
-        add_line("Error: install failed (no free slots or bad package).");
-        return;
-    }
-
-    add_line("Package installed successfully!");
-
-    char names[SPX_MAX_APPS][SPX_NAME_LEN];
-    int count = spx_list_installed(names, SPX_MAX_APPS);
-    char msg[64];
-    int bi = 0;
-    const char *p = "Installed in slot ";
-    while (*p) msg[bi++] = *p++;
-    char slot_str[4];
-    uint32_to_str((uint32_t)slot, slot_str);
-    p = slot_str;
-    while (*p) msg[bi++] = *p++;
-    const char *q = " (";
-    while (*q) msg[bi++] = *q++;
-    uint32_to_str((uint32_t)count, slot_str);
-    q = slot_str;
-    while (*q) msg[bi++] = *q++;
-    q = " total)";
-    while (*q) msg[bi++] = *q++;
-    msg[bi] = '\0';
-    add_line(msg);
+    if (!read_package_file(path, path))
+        add_line("Error: file not found or unreadable.");
 }
 
 static void cmd_purge(const char *name) {
@@ -477,20 +779,21 @@ static void cmd_purge(const char *name) {
         add_line("Usage: purge <appname>");
         return;
     }
-
-    int result = spx_uninstall(name);
-    if (result < 0) {
+    int self = spx_find_slot("SOLPKG");
+    int slot = spx_find_slot(name);
+    if (slot >= 0 && slot == self) {
+        add_line("Refusing to uninstall the running SOLPKG.");
+        return;
+    }
+    if (spx_uninstall(name) < 0) {
         add_line("Error: package not found.");
         return;
     }
-
     char msg[64];
-    int bi = 0;
-    const char *p = "Uninstalled: ";
-    while (*p) msg[bi++] = *p++;
-    p = name;
-    while (*p && bi < 60) msg[bi++] = *p++;
-    msg[bi] = '\0';
+    struct sbuf b;
+    sb_init(&b, msg, sizeof(msg));
+    sb_str(&b, "Uninstalled: ");
+    sb_str(&b, name);
     add_line(msg);
 }
 
@@ -518,7 +821,7 @@ static void cmd_execute(const char *cmd) {
     } else if (str_eq(command, "purge")) {
         cmd_purge(cmd);
     } else if (str_eq(command, "local-list")) {
-        cmd_local_list(cmd);
+        cmd_local_list();
     } else if (str_eq(command, "local-install")) {
         cmd_local_install(cmd);
     } else if (str_eq(command, "repo")) {
@@ -527,14 +830,14 @@ static void cmd_execute(const char *cmd) {
         cmd_repo_list(cmd);
     } else if (str_eq(command, "fetch")) {
         cmd_fetch(cmd);
+    } else if (str_eq(command, "upgrade")) {
+        cmd_upgrade(cmd);
     } else {
         char msg[48];
-        int bi = 0;
-        const char *p = "Unknown command: ";
-        while (*p) msg[bi++] = *p++;
-        p = command;
-        while (*p && bi < 46) msg[bi++] = *p++;
-        msg[bi] = '\0';
+        struct sbuf b;
+        sb_init(&b, msg, sizeof(msg));
+        sb_str(&b, "Unknown command: ");
+        sb_str(&b, command);
         add_line(msg);
         add_line("Type 'help' for available commands.");
     }

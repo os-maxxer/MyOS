@@ -1,6 +1,148 @@
-# Solis 2.0 / Daybreak — 50-change modernization pass
+# Solis 2.1 / Bedrock — release notes
 
-This release bundles the requested 50 modernizing, maturing, and branding
+Solis 2.1 is the Bedrock foundation pass: the release focuses on keeping a
+working system intact while its edition and app set change.
+
+## Crisp display, selectable search, and 100-change pass
+
+This pass raises the display to **1920x1080** and adds a 100-item ledger of
+large and small changes. See **[CHANGES-100.md](CHANGES-100.md)** for the full
+list and its verification status.
+
+1. **1080p desktop** — BIOS and UEFI GRUB request 1920x1080x32, and the frame
+   staging, desktop background cache, and wallpaper loader accept the larger
+   frame. The serial boot line reports `w=1920 h=1080 bpp=32`.
+2. **Larger, sharper Browser** — the window is 1000x700 with six 180x135
+   thumbnails and bilinear downscaling for large pictures.
+3. **GIF and ICO** — Browser decodes the first GIF frame (including LZW,
+   interlacing, and transparency) and ICO files (8/24/32-bit and
+   PNG-compressed entries), in addition to its existing BMP, PNG, and JPEG
+   support. BMP now covers 8/16/24/32-bit files and bitfields.
+4. **Expanded Browser settings** — Appearance, primary web API (Bing RSS,
+   DuckDuckGo, or FreeSerp), DuckDuckGo mode, pictures, JavaScript, network
+   status, reset, and clear-history controls all persist in
+   `/home/browser.cfg`.
+5. **Provider fallback chain** — a failed primary provider falls through Bing
+   and DuckDuckGo to FreeSerp. Bing initially failed certificate validation;
+   adding the DigiCert Global Root G3 trust anchor fixed it.
+6. **8-bit BMP fix** — the BMP palette's fourth byte is reserved, not alpha;
+   treating it as alpha blended ordinary 8-bit BMPs into white.
+7. **Picture gallery and launchers** — `file:///picture-formats.html` loads a
+   packaged gallery of six formats. `F11` opens Browser and `F12` opens
+   Settings directly.
+
+## Additional image formats and source sizes
+
+1. **TGA** — truecolor, grayscale, colormapped, uncompressed, and RLE TGA
+   files, including top/bottom and left/right origins.
+2. **Netpbm** — binary PPM (P6), PGM (P5), and PBM (P4), including 16-bit
+   PPM/PGM samples and packed monochrome PBM rows.
+3. **QOI** — the Quite OK Image format with RGB/RGBA chunks, index runs,
+   differences, luma, and run-length packets.
+4. **XBM** — monochrome X BitMap C-source files, parsed without a full image
+   allocation.
+5. **BMP 1-bit and 4-bit** — palette-packed monochrome and 16-color BMPs, in
+   addition to the existing 8/16/24/32-bit support.
+6. **Larger source limits** — PNG now accepts 384x256 (up from 320x256), TGA
+   and PNM accept 8192x8192, BMP accepts 8192x8192, GIF accepts 4096x4096, and
+   ICO accepts 1024x1024. JPEG retains its 16384-pixel ceiling.
+7. **Two galleries** — `picture-formats-2.html` demonstrates TGA, PPM, PGM,
+   PBM, QOI, and XBM alongside the original BMP/PNG/JPEG/ICO/GIF gallery.
+
+The host fixture suite decodes all of the old and new formats with
+`failures=0`, including plain and RLE TGA, 1-bit/4-bit BMP, and a 384x256
+PNG. The VirtualBox guest renders all six images on the second gallery page.
+
+## Browser, audio, and package-room pass
+
+1. **Section links** — Browser preserves URL fragments, scrolls to matching
+   `id` anchors, and applies Wikipedia `#section` fragments after the article
+   finishes loading. Same-page links update the address without a refetch.
+2. **Larger JavaScript engine** — the bounded interpreter now has more nodes,
+   environments, variables, functions, events, strings, and arrays; added
+   `setTimeout`/`setInterval`, `querySelectorAll`, `createElement`,
+   `appendChild`, `removeChild`, `remove`, `parentNode`/`children`/`next`, and
+   `classList`, plus string, array, and `Math` helpers. Timers run from the
+   Browser tick without blocking input.
+3. **3 MiB app slots** — SPX slots grew from 2 MiB to 3 MiB, with app bases
+   3 MiB apart and the kernel's user-image and frame staging areas moved below
+   the Doom heap so larger apps load without overlapping staging memory.
+4. **AC'97 sound** — a PCI AC'97 PCM-out driver initializes the codec, builds a
+   48 kHz stereo 16-bit buffer, and plays a test tone. Settings gained a Sound
+   tab with driver status and mouse or Enter activation.
+5. **Wikipedia rendering** — articles are fetched through the lightweight
+   `action=render` endpoint and styled with a Wikipedia-like theme, with a
+   logo, wordmark, search field, article tabs, and language link. Infobox and
+   article pictures load through bounded thumbnails. Large documents skip page
+   stylesheet matching, which keeps long articles responsive instead of
+   spending minutes in selector matching.
+6. **GitHub search and repositories** — `gh`/`github` searches use the GitHub
+   repository API, and repository addresses render a themed page with the
+   owner avatar, name, description, stars, forks, issues, language, navigation,
+   About panel, and README instead of loading GitHub's script-heavy page. A
+   synthetic dark dashboard supplies the familiar GitHub home, header, and
+   search field.
+7. **Downloads** — `Save`/`Ctrl+S` and links with the `download` attribute write
+   pages or files to `/home/downloads`, with safe filenames and numeric
+   suffixes when a name already exists.
+8. **Browser settings and search safety** — a toolbar Settings page stores
+   Light/Dark mode and three DuckDuckGo choices in `/home/browser.cfg`: off,
+   fallback only, or results merged into every web search. Wikipedia and GitHub
+   search forms now submit to Solis result pages rather than loading the full
+   source sites, and form/DOM parent walks are depth-limited so a malformed
+   tree cannot freeze the mouse and desktop.
+9. **CSS coverage** — flex and grid containers fall back to block layout,
+   `visibility`, widths, `max-width`, automatic margins, and site themes for
+   Wikipedia and GitHub cover more of their familiar presentation.
+10. **Search freeze and connection retry** — TCP checksums now use a
+    packet-sized scratch buffer instead of a 512-byte stack buffer. TLS writes
+    are sent in 1 KiB chunks, so a larger search request could overwrite the
+    checksum function's return address and halt the kernel; this was the cause
+    of the Wikipedia search freeze. Browser also retries a failed DNS lookup or
+    connection once before showing a connection error, so a transient loss no
+    longer requires a manual refresh.
+
+## Bedrock 2.1 foundation pass
+
+1. **Restart-safe Edition Manager** — **Settings > Edition** queues Minimal,
+   Standard, or Extra without reinstalling or erasing the account and files.
+2. **Pending edition state** — the request is stored separately from the
+   account, so the running desktop is never unloaded underneath an open
+   window. The next boot applies it before the desktop starts.
+3. **Cancellable changes** — selecting the current edition clears a queued
+   change, and the tab shows both the current and next-start editions.
+4. **Bedrock identity** — the release line is now **Solis 2.1 / Bedrock** in
+   setup, sign-in, the start menu, and About.
+5. **PCnet-FAST III networking** — Solis also drives the AMD PCnet-FAST III
+   (Am79C973) in 32-bit software style, so VirtualBox NAT works with its
+   PCnet adapter as well as the existing RTL8139.
+6. **Small HTTP/HTTPS and local-file browser** — Browser is a thirteenth SPX
+   app. It renders HTTP, HTTPS, and `file://` HTML as a DOM-lite tree with
+   headings, paragraphs, CSS `<style>` rules, inline colors, backgrounds,
+   links, buttons, lists, rules, and BMP/PNG/JPEG images; it scrolls with the
+   wheel or arrow keys and follows the online-only launch rule. A bounded,
+   integer-only JavaScript subset handles variables, functions, loops, arrays,
+   `document` queries, `textContent`/`innerHTML`, style changes,
+   `onclick`/`addEventListener`, `document.write`, and `window.onload`. Images
+   load one per tick through a four-thumbnail cache; a baseline JPEG decoder
+   handles grayscale and YCbCr images at 4:4:4, 4:2:2, and 4:2:0 sampling
+   without a source-sized buffer. The CSS engine handles tag, class, id, and
+   descendant selectors, the cascade, colors, backgrounds, display, margins,
+   padding, borders, radius, font weight, alignment, and underline. Typing
+   plain words such as `wikipedia` in the address bar opens a Solis results page
+   backed by a keyless web search API, with DuckDuckGo and Wikipedia links on
+   the results page.
+   The start page has a colorful masthead, search field, and shortcut tiles.
+   HTTPS uses a kernel TLS 1.2 client with X.509 validation against a bundle of
+   ISRG, DigiCert, Google Trust Services, and Amazon roots, and HTTP requests
+   send browser-like headers, so more sites load. A sample local page,
+   `/welcome.html`, demonstrates CSS cards, a JPEG photograph, search, and an
+   interactive button; Editor gained a real HTML mode with tag, attribute,
+   string, comment, and entity highlighting.
+
+## Daybreak 2.0 / 50-change pass
+
+The 2.0 release bundled the requested 50 modernizing, maturing, and branding
 changes. Every item below is implemented in the source tree.
 
 ## Brand and product maturity (1–10)

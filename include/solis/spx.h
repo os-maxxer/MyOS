@@ -4,8 +4,8 @@
 #include <solis/types.h>
 
 #define SPX_MAGIC    0x5350580A
-#define SPX_VERSION  2
-#define SPX_MAX_APPS 12
+#define SPX_VERSION  3
+#define SPX_MAX_APPS 14
 #define SPX_NAME_LEN 12
 
 struct spx_header {
@@ -16,6 +16,11 @@ struct spx_header {
     uint32_t stack_size;
     uint32_t exports_offset;
     char     name[SPX_NAME_LEN];
+    /* Version 3: the slot base the image was linked for, or 0 for a package
+     * that can load into any free slot. A non-zero value pins the package to
+     * exactly one slot, which is what makes runtime installs safe: the code
+     * contains absolute addresses resolved against that base. */
+    uint32_t load_base;
 } __attribute__((packed));
 
 struct embedded_spx {
@@ -45,7 +50,19 @@ struct app_exports {
 };
 
 #define SPX_SLOT_BASE   0x01000000
-#define SPX_SLOT_SIZE   0x00200000
+/* Each built-in app gets 3 MiB of code/BSS space. Bases stay 3 MiB apart
+ * and stop below the Doom heap at 0x04000000. */
+#define SPX_SLOT_SIZE   0x00300000
+#define SPX_SLOT_BASE_FOR(slot) (SPX_SLOT_BASE + SPX_SLOT_SIZE * (uint32_t)(slot))
+
+/* Negative spx_install() results. */
+#define SPX_ERR_BAD    (-1) /* malformed or truncated image */
+#define SPX_ERR_BUSY   (-2) /* the image's slot holds a different app */
+#define SPX_ERR_BASE   (-3) /* load_base is not a valid slot base */
+
+/* Slot that owns a given linked base, or -1 when the base is not one of the
+ * SPX slots. */
+int  spx_slot_for_base(uint32_t base);
 
 void spx_init(struct embedded_spx *apps, int count);
 const struct app_exports *spx_get_exports(int slot);
@@ -73,6 +90,8 @@ enum spx_app_id {
     SPX_BLOCKS      = 9,
     SPX_CALCULATOR  = 10,
     SPX_DOOM        = 11,
+    SPX_BROWSER     = 12,
+    SPX_CK3         = 13,
 };
 
 #endif

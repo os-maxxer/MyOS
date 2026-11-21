@@ -8,6 +8,8 @@
 
 #define SYSCALL_TABLE_ADDR 0x00007E00
 
+struct app_exports;
+
 struct syscall_table {
     void (*exit)(int code);
     void (*fill_rect)(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
@@ -107,6 +109,27 @@ struct syscall_table {
     /* Read-only shareware WAD embedded in the kernel image. */
     const uint8_t *doom_wad;
     uint32_t doom_wad_size;
+
+    /* Restart-safe edition changes. setup_pending_edition() returns the
+     * current edition when no change is queued. */
+    int (*setup_pending_edition)(void);
+    int (*setup_request_edition)(int edition);
+
+    int (*net_https_get)(const uint8_t *ip, uint16_t port,
+                         const char *host, const char *path,
+                         uint8_t *response, uint32_t max_size);
+
+    int (*audio_available)(void);
+    int (*audio_play_tone)(uint32_t hz, uint32_t ms);
+
+    /* UTF-8 aware text measurement, matching graphics_draw_string. */
+    int (*text_width)(const char *text);
+
+    /* Package slot introspection for SOLPKG: the exports of a loaded app,
+     * and the slot a linked base maps to. */
+    const struct app_exports *(*spx_get_exports)(int slot);
+    int (*spx_slot_for_base)(uint32_t base);
+    int (*gui_app_window)(int slot);
 };
 
 #endif

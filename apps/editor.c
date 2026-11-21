@@ -14,7 +14,7 @@
 #define TAB_W 2
 #define UNDO_DEPTH 8
 
-enum lang_mode { LANG_C, LANG_LUA, LANG_ASM };
+enum lang_mode { LANG_C, LANG_LUA, LANG_ASM, LANG_HTML, LANG_COUNT };
 
 static char buffer[EDIT_BUF];
 static int row = 0;
@@ -167,11 +167,42 @@ void editor_init(void) {
 
 static const char *lang_name(void) {
     switch (lang) {
-        case LANG_C:   return "C";
-        case LANG_LUA: return "Lua";
-        case LANG_ASM: return "ASM";
+        case LANG_C:    return "C";
+        case LANG_LUA:  return "Lua";
+        case LANG_ASM:  return "ASM";
+        case LANG_HTML: return "HTML";
+        case LANG_COUNT: break;
     }
     return "?";
+}
+
+static enum lang_mode lang_for_path(const char *path) {
+    int len = str_len(path);
+    if (len >= 5 && path[len - 5] == '.' &&
+        (path[len - 4] == 'h' || path[len - 4] == 'H') &&
+        (path[len - 3] == 't' || path[len - 3] == 'T') &&
+        (path[len - 2] == 'm' || path[len - 2] == 'M') &&
+        (path[len - 1] == 'l' || path[len - 1] == 'L'))
+        return LANG_HTML;
+    if (len >= 4 && path[len - 4] == '.' &&
+        (path[len - 3] == 'h' || path[len - 3] == 'H') &&
+        (path[len - 2] == 't' || path[len - 2] == 'T') &&
+        (path[len - 1] == 'm' || path[len - 1] == 'M'))
+        return LANG_HTML;
+    if (len >= 4 && path[len - 4] == '.' &&
+        (path[len - 3] == 'l' || path[len - 3] == 'L') &&
+        (path[len - 2] == 'u' || path[len - 2] == 'U') &&
+        (path[len - 1] == 'a' || path[len - 1] == 'A'))
+        return LANG_LUA;
+    if (len >= 4 && path[len - 4] == '.' &&
+        (path[len - 3] == 'a' || path[len - 3] == 'A') &&
+        (path[len - 2] == 's' || path[len - 2] == 'S') &&
+        (path[len - 1] == 'm' || path[len - 1] == 'M'))
+        return LANG_ASM;
+    if (len >= 2 && path[len - 2] == '.' &&
+        (path[len - 1] == 's' || path[len - 1] == 'S'))
+        return LANG_ASM;
+    return LANG_C;
 }
 
 static void save_file(void) {
@@ -228,8 +259,9 @@ static void editor_load_path(const char *path) {
     int i = 0;
     while (path[start] && i < MAX_FNAME - 1) cur_file[i++] = path[start++];
     cur_file[i] = '\0';
+    lang = lang_for_path(path);
     undo_reset();
-    set_status("Loaded file");
+    set_status(lang == LANG_HTML ? "Loaded HTML file" : "Loaded file");
 }
 
 void editor_open_file(const char *path) {
@@ -254,8 +286,162 @@ static uint32_t str_color      = 0xFFCC6600;
 static uint32_t comment_color  = 0xFF008800;
 static uint32_t num_color      = 0xFF009999;
 static uint32_t text_color     = 0xFF222222;
+static uint32_t tag_color      = 0xFF7A4BE5;
+static uint32_t attr_color     = 0xFFB36A00;
+static uint32_t entity_color   = 0xFF008888;
 
 static int is_digit(char c) { return c >= '0' && c <= '9'; }
+
+static int html_tag_known(const char *tag) {
+    static const char *html_tags[] = {
+        "html", "head", "body", "title", "meta", "link", "style",
+        "script", "main", "header", "footer", "nav", "section",
+        "article", "aside", "div", "span", "p", "a", "h1", "h2",
+        "h3", "h4", "h5", "h6", "ul", "ol", "li", "table", "tr",
+        "td", "th", "form", "input", "button", "label", "img", "br",
+        "hr", "pre", "code", "blockquote", "strong", "em", 0
+    };
+    return is_keyword(tag, html_tags);
+}
+
+/* HTML gets a real tag-aware highlighter: tag names, attribute names,
+ * quoted values, comments and entities each get their own color. */
+static void draw_html_line(int x, int y, int line_start, int line_len,
+                           int *in_comment) {
+    int char_w = 8;
+    int i = 0;
+
+#define HTML_CHAR(pos, cc, col) do { \
+    char _one[2] = { (cc), '\0' }; \
+    graphics_draw_string(x + (pos) * char_w, y, _one, (col)); \
+} while (0)
+
+    while (i < line_len) {
+        char ch = buffer[line_start + i];
+
+        if (*in_comment) {
+            HTML_CHAR(i, ch, comment_color);
+            if (ch == '-' && i + 2 < line_len &&
+                buffer[line_start + i + 1] == '-' &&
+                buffer[line_start + i + 2] == '>') {
+                HTML_CHAR(i + 1, '-', comment_color);
+                HTML_CHAR(i + 2, '>', comment_color);
+                i += 3;
+                *in_comment = 0;
+                continue;
+            }
+            i++;
+            continue;
+        }
+
+        if (ch == '<' && i + 3 < line_len &&
+            buffer[line_start + i + 1] == '!' &&
+            buffer[line_start + i + 2] == '-' &&
+            buffer[line_start + i + 3] == '-') {
+            HTML_CHAR(i, '<', comment_color);
+            HTML_CHAR(i + 1, '!', comment_color);
+            HTML_CHAR(i + 2, '-', comment_color);
+            HTML_CHAR(i + 3, '-', comment_color);
+            i += 4;
+            *in_comment = 1;
+            continue;
+        }
+
+        if (ch == '<') {
+            HTML_CHAR(i, '<', tag_color);
+            i++;
+            if (i < line_len && (buffer[line_start + i] == '/' ||
+                                 buffer[line_start + i] == '!' ||
+                                 buffer[line_start + i] == '?')) {
+                HTML_CHAR(i, buffer[line_start + i], tag_color);
+                i++;
+            }
+
+            int name_start = i;
+            while (i < line_len &&
+                   ((buffer[line_start + i] >= 'a' && buffer[line_start + i] <= 'z') ||
+                    (buffer[line_start + i] >= 'A' && buffer[line_start + i] <= 'Z') ||
+                    (buffer[line_start + i] >= '0' && buffer[line_start + i] <= '9') ||
+                    buffer[line_start + i] == '-' || buffer[line_start + i] == '_' ||
+                    buffer[line_start + i] == ':'))
+                i++;
+            int name_len = i - name_start;
+            char name[32];
+            int ni = 0;
+            for (int k = 0; k < name_len && ni < 31; k++)
+                name[ni++] = buffer[line_start + name_start + k];
+            name[ni] = '\0';
+            uint32_t name_color = html_tag_known(name) ? kw_color_c[0] : tag_color;
+            for (int k = name_start; k < i; k++)
+                HTML_CHAR(k, buffer[line_start + k], name_color);
+
+            while (i < line_len) {
+                ch = buffer[line_start + i];
+                if (ch == '>') {
+                    HTML_CHAR(i, ch, tag_color);
+                    i++;
+                    break;
+                }
+                if (ch == '"' || ch == '\'') {
+                    char quote = ch;
+                    HTML_CHAR(i, ch, str_color);
+                    i++;
+                    while (i < line_len) {
+                        char sc = buffer[line_start + i];
+                        HTML_CHAR(i, sc, str_color);
+                        i++;
+                        if (sc == quote) break;
+                    }
+                    continue;
+                }
+                if (ch == ' ' || ch == '\t' || ch == '/' || ch == '=') {
+                    HTML_CHAR(i, ch, tag_color);
+                    i++;
+                    continue;
+                }
+                if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == ':') {
+                    int attr_start = i;
+                    while (i < line_len) {
+                        char ac = buffer[line_start + i];
+                        if (!((ac >= 'a' && ac <= 'z') || (ac >= 'A' && ac <= 'Z') ||
+                              (ac >= '0' && ac <= '9') || ac == '-' || ac == '_' || ac == ':'))
+                            break;
+                        i++;
+                    }
+                    for (int k = attr_start; k < i; k++)
+                        HTML_CHAR(k, buffer[line_start + k], attr_color);
+                    continue;
+                }
+                HTML_CHAR(i, ch, tag_color);
+                i++;
+            }
+            continue;
+        }
+
+        if (ch == '&') {
+            int semi = -1;
+            for (int k = i + 1; k < line_len && k <= i + 16; k++) {
+                if (buffer[line_start + k] == ';') { semi = k; break; }
+                if (!((buffer[line_start + k] >= 'a' && buffer[line_start + k] <= 'z') ||
+                      (buffer[line_start + k] >= 'A' && buffer[line_start + k] <= 'Z') ||
+                      (buffer[line_start + k] >= '0' && buffer[line_start + k] <= '9') ||
+                      buffer[line_start + k] == '#'))
+                    break;
+            }
+            if (semi >= 0) {
+                for (int k = i; k <= semi; k++)
+                    HTML_CHAR(k, buffer[line_start + k], entity_color);
+                i = semi + 1;
+                continue;
+            }
+        }
+
+        HTML_CHAR(i, ch, text_color);
+        i++;
+    }
+#undef HTML_CHAR
+}
 
 void editor_draw(int x, int y, int w, int h) {
     graphics_fill_rect(x, y, w, TOOLBAR_H, 0xFFE8E8E8);
@@ -346,6 +532,8 @@ void editor_draw(int x, int y, int w, int h) {
         case LANG_C:   keywords = c_kw;   break;
         case LANG_LUA: keywords = lua_kw;  break;
         case LANG_ASM: keywords = asm_kw;  break;
+        case LANG_HTML: keywords = c_kw;   break;
+        case LANG_COUNT: keywords = c_kw;  break;
     }
 
     /* Runs are drawn as contiguous same-colored strings; every character on
@@ -369,10 +557,16 @@ void editor_draw(int x, int y, int w, int h) {
     } \
 } while (0)
 
+    int html_comment = 0;
     for (int r = top_row; r < top_row + rows && r < EDIT_ROWS; r++) {
         int sy = text_top + 4 + (r - top_row) * char_h;
         int line_len = get_line_len(r);
         int cx = text_x + LINE_NUM_W + 4;
+
+        if (lang == LANG_HTML) {
+            draw_html_line(cx, sy, r * EDIT_COLS, line_len, &html_comment);
+            continue;
+        }
 
         char run[EDIT_COLS + 1];
         int ri = 0;
@@ -531,13 +725,13 @@ void editor_handle_mouse(int win_x, int win_y, int win_w, int win_h, int mx, int
         }
         if (rel_x >= 156 && rel_x < 162) {
             /* Prev language */
-            lang = (lang == 0) ? (enum lang_mode)(LANG_ASM) : (enum lang_mode)(lang - 1);
+            lang = (enum lang_mode)((lang + LANG_COUNT - 1) % LANG_COUNT);
             set_status(lang_name());
             return;
         }
         if (rel_x >= 218 && rel_x < 224) {
             /* Next language */
-            lang = (lang == LANG_ASM) ? LANG_C : (enum lang_mode)(lang + 1);
+            lang = (enum lang_mode)((lang + 1) % LANG_COUNT);
             set_status(lang_name());
             return;
         }

@@ -212,7 +212,7 @@ static void draw_background(void) {
     graphics_draw_string(82, 34, "SOLIS", C_TEXT);
     graphics_draw_string(82, 52, "INSTALLER", C_DIM);
 
-    const char *setup = "SOLIS INSTALLER  /  2.0";
+    const char *setup = "SOLIS INSTALLER  /  " SOLIS_VERSION;
     graphics_draw_string((uint32_t)(w - 24 - text_width(setup)),
                          34, setup, C_MUTED);
 }
@@ -489,7 +489,7 @@ static void draw_disk_status(const struct layout *L, int y) {
 static void draw_welcome(const struct wizard_state *s, const struct layout *L) {
     int x = L->content_x;
     int y = L->card_y + 62;
-    graphics_draw_string((uint32_t)x, (uint32_t)y, "SOLIS 2.0  /  DAYBREAK", C_ACCENT);
+    graphics_draw_string((uint32_t)x, (uint32_t)y, SOLIS_RELEASE_LINE, C_ACCENT);
     graphics_draw_string((uint32_t)x, (uint32_t)(y + 26), "Welcome to Solis", C_TEXT);
     graphics_draw_string((uint32_t)x, (uint32_t)(y + 50),
                          "Three editions. One calm system. Choose how much", C_DIM);
