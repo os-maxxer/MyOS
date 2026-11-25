@@ -1,0 +1,70 @@
+# Boot a fresh disk, sign in, install CK3 from the local package and screenshot
+# the game. Run with:
+#     python3 tools/capture.py --flow tools/flows/ck3.txt
+#
+# Assumes the disk still has no account (a fresh `make build/disk.img`); if you
+# built with MKSOLFS_DEV_ACCOUNT set, delete the first block and start at the
+# password. Every screenshot is written to $HOME/solis-test-artifacts.
+
+# First-boot wizard: Enter, Standard, Enter, account, password, Enter x3.
+wait 9
+key ret
+key 2
+key ret
+type lui
+key tab
+type solis
+key ret
+key ret
+key ret
+wait 6
+# Sign in.
+type solis
+key ret
+wait 9
+shot ck3-desktop
+
+# Start menu -> Package Manager. The menu skips section headers, so the
+# selectable order is Helios, Notes, Paint, Files, Editor, Calculator, Browser,
+# Task Manager, Package Manager. The first Tab lands on Helios, so Package
+# Manager is eight presses.
+key meta_l
+wait 1
+key tab
+key tab
+key tab
+key tab
+key tab
+key tab
+key tab
+key tab
+key ret
+wait 5
+shot ck3-solpkg
+
+# Install the local package and launch it.
+type local-install ck3
+key ret
+wait 4
+type launch ck3
+key ret
+wait 8
+shot ck3-title
+
+# Title -> realm picker -> the court.
+key ret
+wait 3
+shot ck3-picker
+key ret
+wait 4
+shot ck3-game
+
+# Dismiss any event the first month raised (option 2), then the diagnostics
+# overlay, then the state dump the serial log can be checked for.
+key 2
+wait 1
+key o
+wait 1
+shot ck3-diagnostics
+key z
+wait 2

@@ -10,7 +10,7 @@
             "author": "Solis OS",
             "file": "terminal/terminal.spx",
             "legacy": "terminal.npx",
-            "size": 76240,
+            "size": 76448,
             "slot": 0
         },
         {
@@ -20,7 +20,7 @@
             "author": "Solis OS",
             "file": "notepad/notepad.spx",
             "legacy": "notepad.npx",
-            "size": 6552,
+            "size": 6768,
             "slot": 1
         },
         {
@@ -30,7 +30,7 @@
             "author": "Solis OS",
             "file": "paint/paint.spx",
             "legacy": "paint.npx",
-            "size": 6888,
+            "size": 7128,
             "slot": 2
         },
         {
@@ -40,7 +40,7 @@
             "author": "Solis OS",
             "file": "settings/settings.spx",
             "legacy": "settings.npx",
-            "size": 19400,
+            "size": 19688,
             "slot": 3
         },
         {
@@ -50,7 +50,7 @@
             "author": "Solis OS",
             "file": "filebrowser/filebrowser.spx",
             "legacy": "filebrowser.npx",
-            "size": 10712,
+            "size": 22560,
             "slot": 4
         },
         {
@@ -60,7 +60,7 @@
             "author": "Solis OS",
             "file": "taskmanager/taskmanager.spx",
             "legacy": "taskmanager.npx",
-            "size": 5080,
+            "size": 5296,
             "slot": 5
         },
         {
@@ -70,7 +70,7 @@
             "author": "Solis OS",
             "file": "solpkg/solpkg.spx",
             "legacy": "solpkg.npx",
-            "size": 21232,
+            "size": 21344,
             "slot": 6
         },
         {
@@ -80,7 +80,7 @@
             "author": "Solis OS",
             "file": "editor/editor.spx",
             "legacy": "editor.npx",
-            "size": 14896,
+            "size": 15136,
             "slot": 7
         },
         {
@@ -90,7 +90,7 @@
             "author": "Solis OS",
             "file": "tetris/tetris.spx",
             "legacy": "tetris.npx",
-            "size": 9008,
+            "size": 9216,
             "slot": 8
         },
         {
@@ -100,7 +100,7 @@
             "author": "Solis OS",
             "file": "blocks/blocks.spx",
             "legacy": "blocks.npx",
-            "size": 16840,
+            "size": 17064,
             "slot": 9
         },
         {
@@ -110,7 +110,7 @@
             "author": "Solis OS",
             "file": "calculator/calculator.spx",
             "legacy": "calculator.npx",
-            "size": 5936,
+            "size": 6176,
             "slot": 10
         },
         {
@@ -120,7 +120,7 @@
             "author": "Solis OS",
             "file": "doom/doom.spx",
             "legacy": "doom.npx",
-            "size": 692968,
+            "size": 693016,
             "slot": 11
         },
         {
@@ -130,17 +130,17 @@
             "author": "Solis OS",
             "file": "browser/browser.spx",
             "legacy": "browser.npx",
-            "size": 173120,
+            "size": 173328,
             "slot": 12
         },
         {
             "name": "ck3",
-            "version": "1.3.0",
-            "description": "Crusader Kings III - real Europe coastline, land-cut provinces",
+            "version": "1.4.0",
+            "description": "Crusader Kings III - 1066 courts, wars, sieges, saves",
             "author": "Solis OS",
             "file": "ck3/ck3.spx",
             "legacy": "ck3.npx",
-            "size": 25192,
+            "size": 98920,
             "slot": 13
         }
     ]

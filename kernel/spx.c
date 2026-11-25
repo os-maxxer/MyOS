@@ -15,10 +15,23 @@
 #include <solis/rtc.h>
 #include <solis/jit.h>
 #include <solis/audio.h>
+#include <solis/buildinfo.h>
 #include <stddef.h>
 
 extern const uint8_t doom_wad_start[];
 extern const uint8_t doom_wad_end[];
+
+/* CRC-32 (IEEE 802.3), table-free so it costs no .rodata. Used to verify the
+ * optional integrity footer that mkspx.py appends to every package. */
+uint32_t spx_crc32(const uint8_t *data, uint32_t size) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < size; i++) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; bit++)
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
 
 static void spx_memcpy(void *dst, const void *src, int n) {
     unsigned char *d = (unsigned char *)dst;
@@ -36,6 +49,8 @@ static struct syscall_table sys_table;
 
 static uint32_t total_ram_mb = 0;
 static char cpu_brand[48] = "Unknown CPU";
+
+static const char *spx_build_id(void) { return solis_build_id; }
 
 static void spx_exit(int code) {
     (void)code;
@@ -209,6 +224,8 @@ void spx_init_syscalls(void) {
     sys_table.net_dl_begin          = net_dl_begin;
     sys_table.net_dl_step           = net_dl_step;
     sys_table.net_dl_abort          = net_dl_abort;
+    sys_table.sys_get_build_id      = spx_build_id;
+    sys_table.gui_notify            = gui_notify;
 
     struct syscall_table *target = (struct syscall_table *)SYSCALL_TABLE_ADDR;
     *target = sys_table;
@@ -351,6 +368,19 @@ static int spx_load_to_slot(int slot, const uint8_t *data, uint32_t size) {
     uint32_t hdr_size  = sizeof(struct spx_header);
 
     if (hdr_size + code_size > size) return SPX_ERR_BAD;
+
+    /* Packages built by tools/mkspx.py end with an integrity footer holding a
+     * CRC of the header and code. A truncated download or a copy damaged in
+     * transit is caught here instead of faulting inside the app. Older
+     * packages have no footer and are still accepted. */
+    if (size >= hdr_size + code_size + sizeof(struct spx_footer)) {
+        const struct spx_footer *ft =
+            (const struct spx_footer *)(data + size - sizeof(struct spx_footer));
+        if (ft->magic == SPX_FOOTER_MAGIC &&
+            ft->crc != spx_crc32(data, hdr_size + code_size))
+            return SPX_ERR_CRC;
+    }
+
     /* Reject rather than silently truncate: a package that does not fit
      * would run with a clipped .text and fault far from the real cause. */
     if (code_size > SPX_SLOT_SIZE || bss_size > SPX_SLOT_SIZE - code_size)

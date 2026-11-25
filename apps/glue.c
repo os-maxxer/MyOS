@@ -333,6 +333,15 @@ int gui_save_dialog(const char *suggested, char *out_path, int out_max) {
     return SYS->gui_save_dialog(suggested, out_path, out_max);
 }
 
+const char *sys_get_build_id(void) {
+    if (!SYS->sys_get_build_id) return "unstamped";
+    return SYS->sys_get_build_id();
+}
+
+void gui_notify(const char *title, const char *body) {
+    if (SYS->gui_notify) SYS->gui_notify(title, body);
+}
+
 void _start(void) {
     for (;;);
 }

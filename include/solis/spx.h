@@ -23,6 +23,22 @@ struct spx_header {
     uint32_t load_base;
 } __attribute__((packed));
 
+/* Optional integrity footer appended after the code image by mkspx.py. It is
+ * *outside* the header on purpose: changing sizeof(struct spx_header) would
+ * relocate the code for every already-built package. A loader that does not
+ * know about the footer ignores the trailing bytes, and a package without one
+ * is still accepted, so the format stays backward compatible. */
+#define SPX_FOOTER_MAGIC 0x46585053u
+
+struct spx_footer {
+    uint32_t magic;          /* SPX_FOOTER_MAGIC */
+    uint32_t crc;            /* CRC-32 of the header plus the code image */
+    char     version[16];    /* package version, e.g. "1.4.0" */
+    char     stamp[24];      /* build stamp that produced the package */
+} __attribute__((packed));
+
+uint32_t spx_crc32(const uint8_t *data, uint32_t size);
+
 struct embedded_spx {
     const char *name;
     const uint8_t *data;
@@ -61,6 +77,7 @@ struct app_exports {
 #define SPX_ERR_BAD    (-1) /* malformed or truncated image */
 #define SPX_ERR_BUSY   (-2) /* the image's slot holds a different app */
 #define SPX_ERR_BASE   (-3) /* load_base is not a valid slot base */
+#define SPX_ERR_CRC    (-4) /* integrity footer does not match the image */
 
 /* Slot that owns a given linked base, or -1 when the base is not one of the
  * SPX slots. */

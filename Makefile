@@ -12,6 +12,17 @@ LDFLAGS ?= -m elf_x86_64 -T linker.ld -nostdlib -z noexecstack
 OBJCOPY ?= objcopy
 GRUB_MKRESCUE := $(shell command -v grub2-mkrescue 2>/dev/null || command -v grub-mkrescue 2>/dev/null || echo grub-mkrescue)
 
+# Build identity. Compiled into the kernel and into every SPX package footer,
+# so any artifact -- ISO, disk image or VDI -- can be traced to one build and
+# a stale one can be proven stale by tools/verify_images.py.
+BUILD_STAMP := $(shell date -u +%Y%m%d-%H%M%S)
+# SOLIS_GIT_SHA lets a build tree without .git (tools/ship.sh copies the
+# source into WSL without it) still stamp the real commit.
+GIT_SHA := $(if $(SOLIS_GIT_SHA),$(SOLIS_GIT_SHA),$(shell git rev-parse --short HEAD 2>/dev/null || echo nogit))
+BUILD_ID := $(BUILD_STAMP)-$(GIT_SHA)
+export SPX_BUILD_STAMP := $(BUILD_ID)
+export SPX_VERSION := 2.1
+
 BUILD_DIR := build
 BOOT_DIR := boot
 KERNEL_DIR := kernel
@@ -81,6 +92,7 @@ OBJS := \
 	$(BUILD_DIR)/kernel/dbg.o \
 	$(BUILD_DIR)/kernel/jit.o \
 	$(BUILD_DIR)/kernel/spx.o \
+	$(BUILD_DIR)/kernel/buildinfo.o \
 	$(BUILD_DIR)/kernel/bmp.o \
 	$(BUILD_DIR)/kernel/doom_wad.o \
 	$(BUILD_DIR)/gui/gui.o \
@@ -228,6 +240,11 @@ $(BUILD_DIR)/kernel/jit.o: $(KERNEL_DIR)/jit.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/kernel/spx.o: $(KERNEL_DIR)/spx.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Always rebuilt: a stale build id is worse than no build id, because it
+# points at the wrong source.
+$(BUILD_DIR)/kernel/buildinfo.o: $(KERNEL_DIR)/buildinfo.c FORCE | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DSOLIS_BUILD_ID='"$(BUILD_ID)"' -c $< -o $@
 
 $(BUILD_DIR)/kernel/bmp.o: $(KERNEL_DIR)/bmp.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -537,7 +554,7 @@ $(SPX_DIR)/blocks_spx_embed.o: $(SPX_DIR)/blocks.spx
 	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.spx_apps $< $@
 
 # --- Crusader Kings III ---
-$(SPX_DIR)/ck3.o: $(APPS_DIR)/ck3.c | $(SPX_DIR)
+$(SPX_DIR)/ck3.o: $(APPS_DIR)/ck3.c include/solis/apps/ck3_map.h | $(SPX_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SPX_DIR)/glue_ck3.o: $(APPS_DIR)/glue.c | $(SPX_DIR)
@@ -730,7 +747,9 @@ $(BUILD_DIR)/solis.iso: $(BUILD_DIR)/solis.kernel boot/grub/grub.cfg
 	cp boot/grub/grub.cfg $(BUILD_DIR)/isofiles/boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(BUILD_DIR)/isofiles >/dev/null 2>&1
 
-# Disk with pre-loaded packages
+# Disk with pre-loaded packages. For a faster test loop, export
+# MKSOLFS_DEV_ACCOUNT=user:password and the image boots straight to sign-in
+# instead of the first-boot wizard.
 $(BUILD_DIR)/disk.img: pkg-spx $(BUILD_DIR)/user_test.elf tools/mksolfs.py
 	python3 tools/mksolfs.py pkg/ $@ $(BUILD_DIR)/user_test.elf
 
@@ -789,7 +808,20 @@ run-nographic: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 run-dbg: $(BUILD_DIR)/solis.iso $(BUILD_DIR)/disk.img
 	qemu-system-x86_64 -vga std -m 256M -cdrom $(BUILD_DIR)/solis.iso -drive file=$(BUILD_DIR)/disk.img,format=raw,if=ide -serial stdio -netdev user,id=net0,ip=10.0.2.15,net=10.0.2.0/24,host=10.0.2.2 -device rtl8139,netdev=net0
 
+# Prove the artifacts match this build before they ship. Checks that pkg/
+# copies equal build/spx/ copies, and that every shipped image really
+# contains this kernel and these packages.
+verify-images:
+	python3 tools/verify_images.py --build-dir $(BUILD_DIR)
+
+# Host-compiled checks for the integer logic that does not need a VM:
+# province hit-testing, pathfinding, casus belli, save round-trips.
+test-ck3: | $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)/tests
+	$(CC) -m64 -O1 -g -Wall -Wextra -Werror -Iinclude -o $(BUILD_DIR)/tests/ck3_test tests/ck3/test_ck3.c
+	./$(BUILD_DIR)/tests/ck3_test
+
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all get run run-x11 run-sdl run-serial run-x11-serial run-sdl-serial run-nographic run-dbg clean vbox-disk blank-vdi boot-vdi
+.PHONY: all get run run-x11 run-sdl run-serial run-x11-serial run-sdl-serial run-nographic run-dbg clean vbox-disk blank-vdi boot-vdi verify-images test-ck3 FORCE

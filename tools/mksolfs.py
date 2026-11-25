@@ -26,6 +26,58 @@ SOLFS_FAT_EOF = 0xFFFF
 SOLFS_ATTR_DIR = 0x01
 SOLFS_MAX_FILE_SIZE = (DISK_SECTORS - SOLFS_DATA_START) * SECTOR_SIZE
 
+# The account record written by kernel/setup.c. A development image can carry
+# one so every rebuild boots straight to sign-in instead of replaying the
+# first-boot wizard. Defaults mirror setup.c exactly; a wrong value here shows
+# up as the wizard appearing again, not as a corrupt disk.
+SETUP_PATH = 'settings/account'
+SETUP_MAGIC = 0x53455450
+SETUP_VERSION = 2
+SETUP_EDITION_EXTRA = 2
+GUI_THEME_SOLIS_UI_ENGINE = 8
+MASK64 = (1 << 64) - 1
+
+
+def setup_hash_password(password, salt):
+    """The salted hash from kernel/setup.c, reproduced byte for byte."""
+    value = 1469598103934665603
+    value ^= (salt * 0x9E3779B97F4A7C15) & MASK64
+    value &= MASK64
+    for ch in password.encode('utf-8'):
+        value ^= ch
+        value = (value * 1099511628211) & MASK64
+    value ^= value >> 33
+    value = (value * 0xFF51AFD7ED558CCD) & MASK64
+    value ^= value >> 33
+    return value & MASK64
+
+
+def dev_account_entry(spec):
+    """Turn "user:password" into (filename, record, attrs), or None."""
+    if not spec or ':' not in spec:
+        return None
+    username, _, password = spec.partition(':')
+    username = username.strip()[:23]
+    if not username or not password:
+        return None
+    salt = 0x51A7C0DE
+    record = struct.pack(
+        '<IHBBB3sIQ24sBB2s',
+        SETUP_MAGIC,
+        SETUP_VERSION,
+        1,                      # installed
+        GUI_THEME_SOLIS_UI_ENGINE,
+        0,                      # timezone index 0 == UTC
+        b'\x00\x00\x00',
+        salt,
+        setup_hash_password(password, salt),
+        username.encode('utf-8'),
+        SETUP_EDITION_EXTRA,
+        0,                      # not a guest account
+        b'\x00\x00',
+    )
+    return (SETUP_PATH, record, 0)
+
 
 def load_existing_disk(path):
     """Return {name: (data, attrs)} for a valid existing SOLFS image, or {}."""
@@ -97,6 +149,20 @@ def collect_packages(pkg_dir):
 def create_disk(pkg_dir, output_path, user_elf=None):
     # Packages always take precedence over any same-named existing entry.
     files = [(name, data, 0) for name, data in collect_packages(pkg_dir).items()]
+
+    # Optional development account: MKSOLFS_DEV_ACCOUNT=user:password boots
+    # straight to sign-in. Opt-in, never the default, and it only ever writes
+    # the normal account record, so the login screen still checks the password.
+    dev_spec = os.environ.get('MKSOLFS_DEV_ACCOUNT', '').strip()
+    if dev_spec:
+        entry = dev_account_entry(dev_spec)
+        if entry is None:
+            print("Error: MKSOLFS_DEV_ACCOUNT must be user:password",
+                  file=sys.stderr)
+            sys.exit(1)
+        files = [f for f in files if f[0] != entry[0]]
+        files.append(entry)
+        print("Note: development account written; the setup wizard is skipped")
 
     if user_elf:
         if not os.path.isfile(user_elf):

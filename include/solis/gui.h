@@ -27,7 +27,10 @@ void gui_update_clock(void);
 /* Advance time-based app animations at about 20 Hz. */
 void gui_tick(void);
 void gui_close_window(int idx);
+void gui_close_focused(void);
 void gui_toggle_start_menu(void);
+/* Post a toast notification in the top-right corner of the desktop. */
+void gui_notify(const char *title, const char *body);
 bool gui_take_logout(void);
 void gui_set_bg_color(uint32_t color);
 uint32_t gui_get_bg_color(void);

@@ -136,6 +136,16 @@ struct syscall_table {
     int  (*net_dl_begin)(const char *url, uint8_t *buf, uint32_t max_size);
     int  (*net_dl_step)(struct net_dl_progress *progress);
     void (*net_dl_abort)(void);
+
+    /* Build identity of the running kernel, e.g. "20261121-184501-3f9a1c2".
+     * Appended last so packages built against an older table stay valid; a
+     * kernel that predates the field leaves it NULL and callers fall back. */
+    const char *(*sys_get_build_id)(void);
+
+    /* Desktop toast notification. Appended after the build identity so a
+     * package built against an older table still loads; a kernel without
+     * this field leaves it NULL and the glue wrapper drops the call. */
+    void (*gui_notify)(const char *title, const char *body);
 };
 
 #endif

@@ -53,8 +53,20 @@ echo "[ship] syncing source to WSL"
   '
 )
 
-echo "[ship] building kernel, ISO, package disk, and UEFI VDI"
-wsl --cd /tmp -e bash -c 'cd "$HOME/solis-tick" && make -j"$(nproc)" build/solis.iso build/disk.img build/solis-uefi.vdi'
+# The source copy has no .git, so read the commit here and hand it to make:
+# without it the build id says "nogit" and points at nothing.
+git_sha="$(cd "$root" && git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+
+echo "[ship] building kernel, ISO, package disk, and UEFI VDI (commit $git_sha)"
+wsl --cd /tmp -e bash -c 'cd "$HOME/solis-tick" && make -j"$(nproc)" SOLIS_GIT_SHA='"$git_sha"' build/solis.iso build/disk.img build/solis-uefi.vdi'
+
+# Refuse to ship images that do not actually contain this build. This is the
+# check that would have caught the VDI carrying a 25 KB ck3.spx.
+echo "[ship] running host tests"
+wsl --cd /tmp -e bash -c 'cd "$HOME/solis-tick" && make test-ck3'
+
+echo "[ship] verifying artifact contents"
+wsl --cd /tmp -e bash -c 'cd "$HOME/solis-tick" && python3 tools/verify_images.py --build-dir build'
 
 echo "[ship] copying images back"
 staging="$dest/.ship-staging"

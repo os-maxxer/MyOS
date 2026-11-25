@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Welcome to Solis</title>
+  <style>
+    body { background: #f7fbff; color: #203044; }
+    h1 { color: #12395f; }
+    .card {
+      background: #ffffff;
+      border: 1px solid #cfe0f0;
+      border-radius: 8px;
+      padding: 10px;
+      margin: 10px 0;
+    }
+    .tag { color: #1a73e8; font-weight: bold; }
+    .muted { color: #6b7280; }
+  </style>
+</head>
+<body>
+  <center>
+    <img src="solis.png" alt="Solis sunrise" width="192" height="128">
+  </center>
+  <h1>Welcome to Solis</h1>
+  <p>This page lives on the Solis disk, not on the network. Browser opened it
+  with a <code>file://</code> address. It can render styled blocks, images,
+  section links, downloads, and a small amount of JavaScript.</p>
+  <p><a href="#try">Jump to Try this</a> &nbsp; | &nbsp;
+  <a href="#downloads">Jump to Downloads</a></p>
+
+  <div class="card">
+    <h2>Search the web</h2>
+    <p>On the start page or in the address bar, type plain words such as
+    <code>wikipedia</code> or <code>solar system</code> and press Enter.
+    Browser shows a results page with links you can follow. Exact addresses
+    still work too.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="try">Try this</h2>
+    <ul>
+      <li>Type <code>wikipedia</code> in the address bar and press Enter.</li>
+      <li>Type <code>file:///welcome.html</code> to open this page again.</li>
+      <li>Choose <b>Open</b> to browse to any local <code>.html</code> file.</li>
+      <li>Use the Editor's HTML mode to write and save your own page.</li>
+      <li>Try the button below. It calls a tiny script.</li>
+    </ul>
+    <button id="magic" onclick="sparkle()">Make it change</button>
+    <p id="demo">The script will replace this text.</p>
+  </div>
+
+  <div class="card">
+    <h2>JPEG and stylesheets</h2>
+    <p><span class="tag">Baseline JPEG</span> is decoded directly by Browser,
+    alongside BMP and PNG. This photograph is a JPEG image:</p>
+    <img src="solis-photo.jpg" alt="A JPEG photograph" width="160" height="120">
+    <p class="muted">Public-domain sample photograph. The cards, colours,
+    padding, rounded borders, and this muted sentence come from the
+    stylesheet in this page's head.</p>
+  </div>
+
+  <div class="card">
+    <h2 id="downloads">Downloads</h2>
+    <p>Click a link with the <code>download</code> attribute, or press
+    <b>Save</b> / <b>Ctrl+S</b>, to copy the current page or file into
+    <code>/home/downloads</code>. Filenames are made safe and duplicates get a
+    numeric suffix.</p>
+    <p><a href="/solis.png" download>Download the Solis sunrise image</a></p>
+    <p><a href="/solis-photo.jpg" download>Download the JPEG photograph</a></p>
+  </div>
+
+  <h2>Links still work</h2>
+  <p>You can follow a local link or head back to the web:</p>
+  <ul>
+    <li><a href="/welcome.html">Reload this local page</a></li>
+    <li><a href="https://en.wikipedia.org/wiki/Main_Page">Wikipedia</a></li>
+    <li><a href="http://example.com/">Example Domain</a></li>
+  </ul>
+
+  <hr>
+  <p><i>Solis Browser is deliberately small: text, a little CSS, BMP/PNG/JPEG
+  images, web search, and a tiny JavaScript subset.</i></p>
+
+  <script>
+    window.onload = function() {
+      var d = document.getElementById("demo");
+      d.textContent = "Window onload ran: the page and its image are ready.";
+      d.style.color = "green";
+    };
+    function sparkle() {
+      var d = document.getElementById("demo");
+      d.textContent = "The button ran a script. Nice.";
+      d.style.color = "#1558b0";
+    }
+  </script>
+</body>
+</html>

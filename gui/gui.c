@@ -24,23 +24,25 @@
 #include <solis/setup.h>
 #include <solis/net.h>
 #include <solis/brand.h>
+#include <solis/buildinfo.h>
+#include <solis/audio.h>
 #include <stdbool.h>
 
 /* ------------------------------------------------------------------ */
 /* Layout                                                              */
 /* ------------------------------------------------------------------ */
 #define MAX_WINDOWS   8
-#define TITLEBAR_H    28
+#define TITLEBAR_H    32
 #define WIN_BORDER    1
 #define BTN_W         22          /* window control button width  */
 #define RESIZE_MARGIN 5
 #define MIN_WIN_W     240
 #define MIN_WIN_H     140
 #define LOGO_W        42
-#define MENU_W        200
-#define MENU_ITEM_H   24
-#define MENU_HEADER_H 30
-#define MENU_SEC_H    18
+#define MENU_W        360
+#define MENU_ITEM_H   26
+#define MENU_HEADER_H 64
+#define MENU_SEC_H    22
 #define SNAP_DIST     8
 /* How far the window drop shadow bleeds past the window rect, to the right
  * and below only. Damage for a window has to include this or the shadow
@@ -84,6 +86,12 @@
 #define C_ERROR       0xFFE05B5B
 #define C_OK          0xFF4FD1B0
 #define C_AMBER       0xFFE4B363
+#define C_SURFACE     0xFF162033
+#define C_SURFACE_HI  0xFF1E2A40
+#define C_STROKE      0xFF2C3A52
+#define C_ACCENT_SOFT 0xFF31506F
+#define C_MUTED       0xFF6C7C93
+#define C_TOAST       0xFF101827
 
 /* ------------------------------------------------------------------ */
 /* State                                                               */
@@ -101,6 +109,7 @@ struct gui_window {
     int  drag_off_y;
     int  resize_ox, resize_oy;      /* pointer pos at resize start    */
     int  resize_ow, resize_oh;      /* bounds at resize start         */
+    int  resize_obx, resize_oby;    /* origin at resize start         */
     struct gui_rect bounds;
     struct gui_rect restore;        /* pre-maximize bounds            */
     char title[24];
@@ -146,6 +155,69 @@ static bool logout_requested = false;
 static int gui_theme = GUI_THEME_SOLIS_UI_ENGINE;
 static uint32_t bg_color = C_BG;
 static bool guest_session = false;
+
+/* ---- Modern shell surfaces ---------------------------------------- */
+static bool quick_open = false;
+static int  quick_hover = -1;
+static int  tray_hover = 0;
+static int  hover_ctrl_window = -1;
+static int  hover_ctrl_kind = 0;     /* 1 minimize, 2 maximize, 3 close */
+
+static bool desktop_menu_open = false;
+static int  desktop_menu_x = 0;
+static int  desktop_menu_y = 0;
+static int  desktop_menu_hover = -1;
+
+static bool about_open = false;
+static int  about_hover_close = 0;
+
+static int  hover_icon = -1;
+static int  selected_icon = -1;
+static uint32_t icon_click_tick = 0;
+
+static char menu_query[24];
+static int  menu_query_len = 0;
+static bool menu_caret_on = false;
+
+#define NOTICE_MAX 4
+#define NOTICE_W 320
+#define NOTICE_H 66
+#define NOTICE_GAP 8
+#define NOTICE_TTL 400
+struct shell_notice {
+    char title[40];
+    char body[110];
+    uint32_t expires;
+};
+static struct shell_notice notices[NOTICE_MAX];
+static int notice_count = 0;
+static int notice_hover = -1;
+
+static bool snap_preview = false;
+static struct gui_rect snap_rect;
+static int  snap_zone = 0;
+
+static bool alt_tab_open = false;
+static uint32_t alt_tab_until = 0;
+
+/* Small text helpers shared by the new surfaces. */
+static int shell_strlen(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
+static void shell_copy(char *dst, const char *src, int max) {
+    int i = 0;
+    if (!dst || max <= 0) return;
+    if (src) for (; i < max - 1 && src[i]; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
+static char shell_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+static bool shell_contains_ci(const char *hay, const char *needle) {
+    if (!needle || !needle[0]) return true;
+    for (int i = 0; hay && hay[i]; i++) {
+        int j = 0;
+        while (needle[j] && shell_lower(hay[i + j]) == shell_lower(needle[j])) j++;
+        if (!needle[j]) return true;
+    }
+    return false;
+}
 
 static bool gui_app_allowed(int slot) {
     if (slot < 0 || slot >= SPX_MAX_APPS) return false;
@@ -617,9 +689,16 @@ static void glyph_close(int x, int y, uint32_t c) {
 }
 
 static void gui_draw_ctrl_btn(int x, int y, uint32_t color,
-                              void (*glyph)(int, int, uint32_t)) {
-    graphics_fill_circle(x + BTN_W / 2, y + TITLEBAR_H / 2, 7, color);
-    glyph(x, y, 0xFF08101C);
+                              void (*glyph)(int, int, uint32_t),
+                              bool hovered, bool danger) {
+    if (hovered) {
+        graphics_fill_rounded_rect(x - 1, y + 4, BTN_W + 2, TITLEBAR_H - 8, 6,
+                                   danger ? 0xFFB4373C : C_BTN_HOVER);
+        glyph(x, y, 0xFFFFFFFF);
+    } else {
+        graphics_fill_circle(x + BTN_W / 2, y + TITLEBAR_H / 2, 7, color);
+        glyph(x, y, 0xFF08101C);
+    }
 }
 
 static uint32_t blend_pixel(uint32_t base, uint32_t over, int alpha) {
@@ -662,13 +741,13 @@ static void gui_draw_window_shadow(int x, int y, int w, int h) {
     }
 }
 
-static void gui_draw_window(struct gui_window *w) {
+static void gui_draw_window(struct gui_window *w, int idx) {
     if (!w->visible || w->minimized) return;
     if (w->fullscreen) return;
     int x = w->bounds.x, y = w->bounds.y;
     int ww = w->bounds.width, hh = w->bounds.height;
 
-    uint32_t bar    = w->focused ? 0xFF182235 : 0xFF131A26;
+    uint32_t bar    = w->focused ? 0xFF1A2436 : 0xFF131A26;
     uint32_t border = w->focused ? C_ACTIVE : C_PANEL_LINE;
     uint32_t tcol   = w->focused ? C_TEXT : C_TEXT_DIM;
 
@@ -684,16 +763,25 @@ static void gui_draw_window(struct gui_window *w) {
     graphics_fill_rect(x + 1, y + TITLEBAR_H - 1, ww - 2, 1, 0xFF080D16);
     graphics_draw_rounded_rect(x, y, ww, hh, 12, border);
 
-    /* left-aligned title */
-    graphics_draw_string(x + 14, y + (TITLEBAR_H - 16) / 2, w->title, tcol);
+    /* app icon and left-aligned title */
+    int slot = w->app_id - 1;
+    if (slot >= 0 && slot < SPX_MAX_APPS)
+        draw_app_icon(x + 10, y + (TITLEBAR_H - 16) / 2, 16, slot);
+    graphics_draw_string(x + 32, y + (TITLEBAR_H - 16) / 2, w->title, tcol);
+    if (w->focused)
+        graphics_fill_rect(x + 12, y + TITLEBAR_H - 2, ww - 24, 1, 0xFF2E4666);
 
     /* control buttons: [min] [max] [close] at top-right */
     int bx = x + ww - 3 * BTN_W - 8;
     int by = y;
-    gui_draw_ctrl_btn(bx, by, 0xFFE4B363, glyph_min);
+    bool hov = (hover_ctrl_window == idx);
+    gui_draw_ctrl_btn(bx, by, 0xFFE4B363, glyph_min,
+                      hov && hover_ctrl_kind == 1, false);
     gui_draw_ctrl_btn(bx + BTN_W, by, 0xFF54C7B5,
-                      w->maximized ? glyph_restore : glyph_max);
-    gui_draw_ctrl_btn(bx + 2 * BTN_W, by, 0xFFE05B5B, glyph_close);
+                      w->maximized ? glyph_restore : glyph_max,
+                      hov && hover_ctrl_kind == 2, false);
+    gui_draw_ctrl_btn(bx + 2 * BTN_W, by, 0xFFE05B5B, glyph_close,
+                      hov && hover_ctrl_kind == 3, true);
 }
 
 static void gui_draw_window_content(struct gui_window *w) {
@@ -1105,6 +1193,14 @@ static void draw_desktop_icons(void) {
         int slot = desktop_icon_slots[i];
         int x = desktop_icon_positions[i].x;
         int y = desktop_icon_positions[i].y;
+        bool sel = slot == selected_icon;
+        bool hov = slot == hover_icon;
+        if (sel || hov) {
+            graphics_fill_rounded_rect(x - 8, y - 8, 72, 92, 12,
+                                       sel ? 0xFF203453 : 0xFF17202F);
+            graphics_draw_rounded_rect(x - 8, y - 8, 72, 92, 12,
+                                       sel ? C_ACTIVE : C_STROKE);
+        }
         draw_app_glyph(x, y, 56, slot);
         int len = 0;
         for (const char *p = app_icons[slot].name; *p; p++) len++;
@@ -1260,7 +1356,13 @@ struct tb_layout {
 };
 
 static int tray_width(void) {
-    return 120;
+    return 150;
+}
+
+static const char *account_name(void) {
+    if (guest_session) return "Guest";
+    const char *name = setup_username();
+    return (name && name[0]) ? name : "Solis";
 }
 
 static void draw_text_right(int x, int y, const char *s, uint32_t c) {
@@ -1369,18 +1471,364 @@ static int task_at(int mx, int my) {
     return -1;
 }
 
+static void tray_icon_network(int x, int y) {
+    bool up = net_available() != 0;
+    int heights[3] = {4, 7, 10};
+    for (int i = 0; i < 3; i++) {
+        uint32_t c = up ? C_TEXT_DIM : (i == 0 ? C_MUTED : 0xFF39455A);
+        graphics_fill_rect(x + i * 5, y + 10 - heights[i], 3, heights[i], c);
+    }
+    if (!up)
+        draw_line(x - 1, y + 11, x + 12, y - 1, 0xFFE05B5B);
+}
+
+static void tray_icon_volume(int x, int y) {
+    graphics_fill_rect(x, y + 4, 3, 5, C_TEXT_DIM);
+    graphics_fill_rect(x + 3, y + 2, 2, 9, C_TEXT_DIM);
+    graphics_draw_circle(x + 8, y + 7, 4, C_TEXT_DIM);
+}
+
 static void gui_draw_tray(int tx, int ty, int tw, int th) {
     char timebuf[8];
     char datebuf[12];
     gui_format_time(timebuf, 8);
     gui_format_date(datebuf, 12);
+    if (tray_hover || quick_open)
+        graphics_fill_rounded_rect(tx - 4, ty + 6, tw + 6, th - 12, 9, C_BTN);
+    int ix = tx + 4, iy = ty + th / 2 - 7;
+    tray_icon_network(ix, iy + 1);
+    tray_icon_volume(ix + 20, iy + 1);
+    int right = tx + tw - 2;
     if (guest_session) {
-        datebuf[0] = 'G'; datebuf[1] = 'U'; datebuf[2] = 'E';
-        datebuf[3] = 'S'; datebuf[4] = 'T'; datebuf[5] = '\0';
+        int pw = 46;
+        graphics_fill_rounded_rect(right - pw, ty + th / 2 - 9, pw, 18, 9,
+                                   0xFF3A3220);
+        graphics_draw_string(right - pw + 6, ty + th / 2 - 8, "GUEST", C_AMBER);
+    } else {
+        draw_text_right(right, ty + th / 2 - 17, datebuf, C_TEXT_DIM);
     }
-    int right = tx + tw;
-    draw_text_right(right, ty + th / 2 - 17, datebuf, C_TEXT_DIM);
-    draw_text_right(right, ty + th / 2 + 2, timebuf, C_TEXT);
+    draw_text_right(right, ty + th / 2 + 1, timebuf, C_TEXT);
+}
+
+/* ---- Notification toasts ------------------------------------------ */
+static void gui_damage_notices(void) {
+    int sw = (int)graphics_get_width();
+    int h = notice_count > 0
+              ? notice_count * (NOTICE_H + NOTICE_GAP) + 18
+              : NOTICE_H + 18;
+    gui_damage(sw - NOTICE_W - 34, 6, NOTICE_W + 40, h);
+}
+
+void gui_notify(const char *title, const char *body) {
+    if (notice_count == NOTICE_MAX) {
+        for (int i = 1; i < NOTICE_MAX; i++) notices[i - 1] = notices[i];
+        notice_count--;
+    }
+    struct shell_notice *n = &notices[notice_count++];
+    shell_copy(n->title, title ? title : "Solis", (int)sizeof(n->title));
+    shell_copy(n->body, body ? body : "", (int)sizeof(n->body));
+    n->expires = timer_get_ticks() + NOTICE_TTL;
+    gui_damage_notices();
+}
+
+static void gui_draw_notices(void) {
+    int sw = (int)graphics_get_width();
+    for (int i = 0; i < notice_count; i++) {
+        const struct shell_notice *n = &notices[i];
+        int x = sw - NOTICE_W - 16;
+        int y = 14 + i * (NOTICE_H + NOTICE_GAP);
+        bool hov = notice_hover == i;
+        gui_draw_window_shadow(x, y, NOTICE_W, NOTICE_H);
+        graphics_fill_rounded_rect(x, y, NOTICE_W, NOTICE_H, 12,
+                                   hov ? C_SURFACE_HI : C_TOAST);
+        graphics_draw_rounded_rect(x, y, NOTICE_W, NOTICE_H, 12, C_STROKE);
+        graphics_fill_rounded_rect(x, y + 10, 4, NOTICE_H - 20, 2, C_ACTIVE);
+        graphics_fill_circle(x + 30, y + 24, 11, 0xFF24344C);
+        graphics_draw_string(x + 27, y + 16, "i", 0xFF8FC0FF);
+        graphics_draw_string(x + 50, y + 12, n->title, C_TEXT);
+        char line[40];
+        int k = 0;
+        while (k < 38 && n->body[k]) { line[k] = n->body[k]; k++; }
+        line[k] = '\0';
+        graphics_draw_string(x + 50, y + 34, line, C_TEXT_DIM);
+        draw_line(x + NOTICE_W - 20, y + 14, x + NOTICE_W - 12, y + 22, C_MUTED);
+        draw_line(x + NOTICE_W - 12, y + 14, x + NOTICE_W - 20, y + 22, C_MUTED);
+    }
+}
+
+static int notice_at(int mx, int my) {
+    int sw = (int)graphics_get_width();
+    for (int i = 0; i < notice_count; i++) {
+        int x = sw - NOTICE_W - 16;
+        int y = 14 + i * (NOTICE_H + NOTICE_GAP);
+        if (mx >= x && mx < x + NOTICE_W && my >= y && my < y + NOTICE_H)
+            return i;
+    }
+    return -1;
+}
+
+static void gui_dismiss_notice(int idx) {
+    if (idx < 0 || idx >= notice_count) return;
+    gui_damage_notices();
+    for (int i = idx + 1; i < notice_count; i++) notices[i - 1] = notices[i];
+    notice_count--;
+    gui_damage_notices();
+}
+
+/* ---- Quick settings ------------------------------------------------ */
+#define QS_W 336
+#define QS_H 384
+static const uint32_t quick_theme_swatch[9] = {
+    0xFFB9C2CE, 0xFF0D0D2B, 0xFF9A4A1A, 0xFFE8B8D0, 0xFF1E1E30,
+    0xFF7C86A8, 0xFF707CAF, 0xFF123B4C, 0xFF0B1020,
+};
+
+static void quick_geom(int *x, int *y) {
+    struct tb_layout L;
+    taskbar_compute(&L);
+    int sw = (int)graphics_get_width();
+    *x = L.tray_x + L.tray_w - QS_W;
+    if (*x < 10) *x = 10;
+    if (*x + QS_W > sw - 10) *x = sw - QS_W - 10;
+    *y = L.card_y - QS_H - 8;
+    if (*y < 10) *y = 10;
+}
+
+static void gui_draw_quick(void) {
+    int x, y;
+    quick_geom(&x, &y);
+    bool net = net_available() != 0;
+    char initial[2];
+    initial[0] = account_name()[0];
+    if (initial[0] >= 'a' && initial[0] <= 'z') initial[0] -= 32;
+    initial[1] = '\0';
+
+    gui_draw_window_shadow(x, y, QS_W, QS_H);
+    graphics_fill_rounded_rect(x, y, QS_W, QS_H, 16, C_PANEL);
+    graphics_draw_rounded_rect(x, y, QS_W, QS_H, 16, C_STROKE);
+
+    graphics_fill_circle(x + 30, y + 32, 18, C_ACTIVE);
+    graphics_draw_string(x + 26, y + 24, initial, 0xFFFFFFFF);
+    graphics_draw_string(x + 56, y + 16, account_name(), C_TEXT);
+    graphics_draw_string(x + 56, y + 34,
+                         guest_session ? "Guest session" : "Local account",
+                         C_TEXT_DIM);
+    const char *badge = edition_badge();
+    draw_text_right(x + QS_W - 16, y + 24, badge, 0xFF8FB4E8);
+    graphics_fill_rect(x + 14, y + 62, QS_W - 28, 1, C_STROKE);
+
+    graphics_fill_rounded_rect(x + 14, y + 72, QS_W - 28, 46, 10, C_SURFACE);
+    graphics_fill_circle(x + 30, y + 95, 5, net ? C_OK : C_ERROR);
+    graphics_draw_string(x + 44, y + 80, "Network", C_TEXT);
+    graphics_draw_string(x + 44, y + 99,
+                         net ? net_get_device_name() : "Not connected",
+                         C_TEXT_DIM);
+    graphics_draw_string(x + QS_W - 96, y + 99,
+                         net ? "connected" : "offline",
+                         net ? C_OK : C_TEXT_DIM);
+
+    graphics_fill_rounded_rect(x + 14, y + 126, QS_W - 28, 46, 10, C_SURFACE);
+    graphics_draw_string(x + 44, y + 134, "Sound", C_TEXT);
+    graphics_draw_string(x + 44, y + 153,
+                         audio_available() ? "AC'97 output ready" : "No audio device",
+                         C_TEXT_DIM);
+    tray_icon_volume(x + 24, y + 141);
+
+    graphics_draw_string(x + 16, y + 184, "Appearance", C_TEXT_DIM);
+    for (int i = 0; i < 9; i++) {
+        int sx = x + 14 + (i % 5) * 40;
+        int sy = y + 204 + (i / 5) * 38;
+        graphics_fill_rounded_rect(sx, sy, 28, 28, 8, quick_theme_swatch[i]);
+        graphics_draw_rounded_rect(sx, sy, 28, 28, 8, 0x554A5A72);
+        if (i == gui_theme)
+            graphics_draw_rounded_rect(sx - 2, sy - 2, 32, 32, 10, C_ACTIVE);
+    }
+
+    uint32_t first = quick_hover == 1 ? C_BTN_HOVER : C_BTN;
+    graphics_fill_rounded_rect(x + 14, y + 286, 150, 34, 9, first);
+    graphics_draw_rounded_rect(x + 14, y + 286, 150, 34, 9, C_STROKE);
+    graphics_draw_string(x + 44, y + 295, "All settings", C_TEXT);
+    uint32_t second = quick_hover == 2 ? C_BTN_HOVER : C_BTN;
+    graphics_fill_rounded_rect(x + 172, y + 286, 150, 34, 9, second);
+    graphics_draw_rounded_rect(x + 172, y + 286, 150, 34, 9, C_STROKE);
+    graphics_draw_string(x + 216, y + 295, "Log out", C_TEXT);
+
+    graphics_draw_string(x + 16, y + 332, "Super  launcher", C_MUTED);
+    graphics_draw_string(x + 150, y + 332, "Alt+Tab  windows", C_MUTED);
+    graphics_draw_string(x + 16, y + 356, solis_build_id, C_MUTED);
+}
+
+/* -1 outside, 0 inside with no control, 1 settings, 2 logout, 10+theme */
+static int quick_hit(int mx, int my) {
+    int x, y;
+    quick_geom(&x, &y);
+    if (mx < x || mx >= x + QS_W || my < y || my >= y + QS_H) return -1;
+    if (my >= y + 286 && my < y + 320) {
+        if (mx >= x + 14 && mx < x + 164) return 1;
+        if (mx >= x + 172 && mx < x + 322) return 2;
+    }
+    if (my >= y + 204 && my < y + 270) {
+        int col = (mx - (x + 14)) / 40;
+        int row = (my - (y + 204)) / 38;
+        int off = (mx - (x + 14)) % 40;
+        if (col >= 0 && col < 5 && row >= 0 && row < 2 && off < 28) {
+            int idx = row * 5 + col;
+            if (idx < 9) return 10 + idx;
+        }
+    }
+    return 0;
+}
+
+/* ---- Desktop context menu ------------------------------------------ */
+static const char *desktop_menu_labels[6] = {
+    "Open Terminal", "Files", "Settings", "Next wallpaper",
+    "About Solis", "Refresh desktop",
+};
+#define DESKTOP_MENU_N 6
+
+static void desktop_menu_geom(int *x, int *y, int *w, int *h) {
+    int sw = (int)graphics_get_width();
+    int sh = (int)graphics_get_height();
+    *w = 224;
+    *h = DESKTOP_MENU_N * 30 + 12;
+    *x = desktop_menu_x;
+    *y = desktop_menu_y;
+    if (*x + *w > sw - 8) *x = sw - *w - 8;
+    if (*y + *h > sh - PANEL_H - 8) *y = sh - PANEL_H - *h - 8;
+    if (*x < 8) *x = 8;
+    if (*y < 8) *y = 8;
+}
+
+static void gui_draw_desktop_menu(void) {
+    int x, y, w, h;
+    desktop_menu_geom(&x, &y, &w, &h);
+    gui_draw_window_shadow(x, y, w, h);
+    graphics_fill_rounded_rect(x, y, w, h, 10, C_PANEL);
+    graphics_draw_rounded_rect(x, y, w, h, 10, C_STROKE);
+    for (int i = 0; i < DESKTOP_MENU_N; i++) {
+        int iy = y + 6 + i * 30;
+        if (i == desktop_menu_hover) {
+            graphics_fill_rounded_rect(x + 5, iy, w - 10, 28, 7, C_BTN_HOVER);
+            graphics_fill_rounded_rect(x + 5, iy + 6, 2, 16, 1, C_ACTIVE);
+        }
+        graphics_draw_string(x + 18, iy + 6, desktop_menu_labels[i],
+                             i == desktop_menu_hover ? 0xFFFFFFFF : C_TEXT);
+    }
+}
+
+static int desktop_menu_at(int mx, int my) {
+    int x, y, w, h;
+    desktop_menu_geom(&x, &y, &w, &h);
+    if (mx < x || mx >= x + w || my < y || my >= y + h) return -1;
+    int idx = (my - (y + 6)) / 30;
+    return (idx >= 0 && idx < DESKTOP_MENU_N) ? idx : -1;
+}
+
+/* ---- About Solis modal --------------------------------------------- */
+#define ABOUT_W 540
+#define ABOUT_H 304
+
+static void about_geom(int *x, int *y) {
+    *x = ((int)graphics_get_width() - ABOUT_W) / 2;
+    *y = ((int)graphics_get_height() - PANEL_H - ABOUT_H) / 2;
+    if (*y < 12) *y = 12;
+}
+
+static void gui_draw_about(void) {
+    int x, y;
+    about_geom(&x, &y);
+    gui_draw_window_shadow(x, y, ABOUT_W, ABOUT_H);
+    graphics_fill_rounded_rect(x, y, ABOUT_W, ABOUT_H, 16, C_PANEL);
+    graphics_draw_rounded_rect(x, y, ABOUT_W, ABOUT_H, 16, C_ACTIVE_DK);
+    draw_solis_mark(x + ABOUT_W / 2, y + 42, 44, C_ACTIVE);
+    const char *line = SOLIS_RELEASE_LINE;
+    int lw = shell_strlen(line) * 8;
+    graphics_draw_string(x + (ABOUT_W - lw) / 2, y + 76, line, C_TEXT);
+    const char *tag = SOLIS_TAGLINE;
+    graphics_draw_string(x + (ABOUT_W - shell_strlen(tag) * 8) / 2, y + 98, tag, C_TEXT_DIM);
+    graphics_fill_rect(x + 24, y + 124, ABOUT_W - 48, 1, C_STROKE);
+
+    int ly = y + 138;
+    graphics_draw_string(x + 28, ly, "Build", C_TEXT_DIM);
+    graphics_draw_string(x + 140, ly, solis_build_id, C_TEXT);
+    ly += 20;
+    graphics_draw_string(x + 28, ly, "Kernel", C_TEXT_DIM);
+    graphics_draw_string(x + 140, ly, "64-bit x86-64, freestanding, no libc", C_TEXT);
+    ly += 20;
+    graphics_draw_string(x + 28, ly, "Session", C_TEXT_DIM);
+    graphics_draw_string(x + 140, ly, account_name(), C_TEXT);
+    graphics_draw_string(x + 260, ly,
+                         guest_session ? "Guest" : "Local account", C_TEXT_DIM);
+    ly += 20;
+    graphics_draw_string(x + 28, ly, "Edition", C_TEXT_DIM);
+    graphics_draw_string(x + 140, ly, edition_badge(), C_TEXT);
+    graphics_draw_string(x + 260, ly, "Solis UI Engine", C_TEXT_DIM);
+
+    int bw = 104, bh = 30;
+    int bx = x + (ABOUT_W - bw) / 2;
+    int by = y + ABOUT_H - 44;
+    graphics_fill_rounded_rect(bx, by, bw, bh, 8,
+                               about_hover_close ? C_BTN_HOVER : C_BTN);
+    graphics_draw_rounded_rect(bx, by, bw, bh, 8, C_STROKE);
+    graphics_draw_string(bx + 38, by + 7, "Close", C_TEXT);
+}
+
+static void gui_damage_surface(int x, int y, int w, int h) {
+    gui_damage(x - 6, y - 6, w + 14, h + 14);
+}
+
+/* ---- Alt+Tab window switcher --------------------------------------- */
+static void gui_draw_alt_tab(void) {
+    if (!alt_tab_open) return;
+    int n = 0, idxs[MAX_WINDOWS];
+    for (int zi = 0; zi < zcount && n < MAX_WINDOWS; zi++) {
+        int i = zorder[zi];
+        if (windows[i].visible && !windows[i].minimized) idxs[n++] = i;
+    }
+    if (n == 0) return;
+    int w = 400, row = 40, h = 52 + n * row;
+    int x = ((int)graphics_get_width() - w) / 2;
+    int y = ((int)graphics_get_height() - PANEL_H - h) / 2;
+    if (y < 12) y = 12;
+    gui_draw_window_shadow(x, y, w, h);
+    graphics_fill_rounded_rect(x, y, w, h, 14, C_PANEL);
+    graphics_draw_rounded_rect(x, y, w, h, 14, C_STROKE);
+    graphics_draw_string(x + 16, y + 14, "Switch windows", C_TEXT_DIM);
+    for (int i = 0; i < n; i++) {
+        int iy = y + 40 + i * row;
+        bool sel = idxs[i] == active_window;
+        if (sel) {
+            graphics_fill_rounded_rect(x + 8, iy, w - 16, row - 4, 8, C_BTN_HOVER);
+            graphics_fill_rounded_rect(x + 8, iy + 8, 3, row - 20, 1, C_ACTIVE);
+        }
+        int slot = windows[idxs[i]].app_id - 1;
+        if (slot >= 0 && slot < SPX_MAX_APPS)
+            draw_app_icon(x + 22, iy + (row - 22) / 2, 22, slot);
+        graphics_draw_string(x + 56, iy + (row - 16) / 2,
+                             windows[idxs[i]].title, C_TEXT);
+        if (windows[idxs[i]].focused)
+            graphics_draw_string(x + w - 74, iy + (row - 16) / 2,
+                                 "focused", C_TEXT_DIM);
+    }
+}
+
+/* ---- Snap preview --------------------------------------------------- */
+static void gui_draw_snap_preview(void) {
+    if (!snap_preview) return;
+    const struct gui_rect *r = &snap_rect;
+    graphics_draw_rounded_rect(r->x + 2, r->y + 2, r->width - 4, r->height - 4,
+                               10, C_ACTIVE);
+    graphics_draw_rounded_rect(r->x + 3, r->y + 3, r->width - 6, r->height - 6,
+                               9, 0xFF9CC4FF);
+    const char *label = snap_zone == 1 ? "Maximize" :
+                        snap_zone == 2 ? "Snap left" :
+                        snap_zone == 3 ? "Snap right" :
+                        snap_zone == 4 ? "Snap top left" :
+                        snap_zone == 5 ? "Snap top right" :
+                        snap_zone == 6 ? "Snap bottom left" : "Snap bottom right";
+    graphics_fill_rounded_rect(r->x + 12, r->y + 10, shell_strlen(label) * 8 + 16,
+                               24, 8, 0xDD0E1523);
+    graphics_draw_string(r->x + 20, r->y + 14, label, 0xFFFFFFFF);
 }
 
 static void gui_draw_taskbar_shadow(const struct tb_layout *L) {
@@ -1479,6 +1927,9 @@ static void gui_draw_panel(void) {
     for (int i = 0; i < task_n; i++)
         gui_draw_task_button(&L, task_wins[i], L.task_x + i * (L.task_w + TASK_GAP));
     gui_draw_tray(L.tray_x, L.card_y, L.tray_w, L.card_h);
+    /* Show-desktop sliver at the far right edge of the dock. */
+    graphics_fill_rect(L.card_x + L.card_w - 5, L.card_y + 14,
+                       2, L.card_h - 28, 0xFF2A3A52);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1506,6 +1957,7 @@ static const struct menu_item menu_items[] = {
     {0, 8, "Tetris"},
     {0, 9, "Solis Blocks"},
     {0, 11, "Doom"},
+    {0, 13, "Crusader Kings III"},
     {2, 0, "Settings"},
     {0, 3, "Settings"},
     {2, 0, "Session"},
@@ -1518,13 +1970,24 @@ static const struct menu_item menu_items[] = {
 static bool menu_item_allowed(int i) {
     if (i < 0 || i >= MENU_NUM) return false;
     const struct menu_item *mi = &menu_items[i];
-    if (mi->kind == 0) return gui_app_allowed(mi->arg);
+    if (mi->kind == 0) {
+        if (menu_query_len > 0 && !shell_contains_ci(mi->label, menu_query))
+            return false;
+        return gui_app_allowed(mi->arg);
+    }
     if (mi->kind == 2) {
         for (int j = i + 1; j < MENU_NUM && menu_items[j].kind != 2; j++)
             if (menu_item_allowed(j)) return true;
         return false;
     }
-    return true;
+    /* Session actions are hidden while the launcher is searching. */
+    return menu_query_len == 0;
+}
+
+static int menu_first_match(void) {
+    for (int i = 0; i < MENU_NUM; i++)
+        if (menu_items[i].kind == 0 && menu_item_allowed(i)) return i;
+    return -1;
 }
 
 static int menu_height(void) {
@@ -1597,52 +2060,79 @@ static void gui_draw_start_menu(void) {
     int x, y, w, h;
     menu_geom(&x, &y, &w, &h);
 
-    /* brand header */
-    graphics_fill_gradient_v(x + 1, y + 1, w - 2, MENU_HEADER_H,
-                             0xFF1B2942, 0xFF111A2B);
-    graphics_draw_string(x + 8, y + (MENU_HEADER_H - 16) / 2,
-                         SOLIS_NAME " " SOLIS_VERSION, 0xFFFFFFFF);
-    if (guest_session)
-        graphics_draw_string(x + w - 48, y + (MENU_HEADER_H - 16) / 2,
-                             "GUEST", 0xFFE4B363);
-    else {
-        const char *badge = edition_badge();
-        int len = 0;
-        while (badge[len]) len++;
-        graphics_draw_string(x + w - 8 - len * 8,
-                             y + (MENU_HEADER_H - 16) / 2,
-                             badge, 0xFF8FB4E8);
+    gui_draw_window_shadow(x, y, w, h);
+    graphics_fill_rounded_rect(x, y, w, h, 14, C_PANEL);
+    graphics_fill_rounded_rect(x, y, w, MENU_HEADER_H, 14, 0xFF1B2942);
+    graphics_fill_rect(x, y + 30, w, MENU_HEADER_H - 30, 0xFF162236);
+    graphics_fill_gradient_v(x + 1, y + 1, w - 2, 30, 0xFF223554, 0xFF162236);
+    graphics_draw_rounded_rect(x, y, w, h, 14, C_STROKE);
+
+    /* account row */
+    char initial[2];
+    initial[0] = account_name()[0];
+    if (initial[0] >= 'a' && initial[0] <= 'z') initial[0] -= 32;
+    initial[1] = '\0';
+    graphics_fill_circle(x + 26, y + 22, 13, C_ACTIVE);
+    graphics_draw_string(x + 23, y + 15, initial, 0xFFFFFFFF);
+    graphics_draw_string(x + 46, y + 8, account_name(), C_TEXT);
+    graphics_draw_string(x + 46, y + 24,
+                         guest_session ? "Guest session" : SOLIS_RELEASE_LINE,
+                         C_TEXT_DIM);
+    const char *badge = guest_session ? "GUEST" : edition_badge();
+    draw_text_right(x + w - 14, y + 15, badge,
+                    guest_session ? C_AMBER : 0xFF8FB4E8);
+
+    /* search */
+    graphics_fill_rounded_rect(x + 12, y + 40, w - 24, 20, 8, 0xFF0D1524);
+    graphics_draw_rounded_rect(x + 12, y + 40, w - 24, 20, 8,
+                               menu_query_len > 0 ? C_ACTIVE_DK : C_PANEL_LINE);
+    graphics_draw_circle(x + 23, y + 49, 4, C_MUTED);
+    draw_line(x + 26, y + 52, x + 30, y + 56, C_MUTED);
+    if (menu_query_len > 0) {
+        graphics_draw_string(x + 36, y + 42, menu_query, C_TEXT);
+        if (menu_caret_on)
+            graphics_fill_rect(x + 36 + menu_query_len * 8, y + 43, 1, 14, C_ACTIVE);
+    } else {
+        graphics_draw_string(x + 36, y + 42, "Search apps and actions", C_MUTED);
     }
 
     /* body */
-    graphics_fill_rect(x, y + MENU_HEADER_H, w, h - MENU_HEADER_H, C_PANEL);
-    graphics_draw_rect(x, y, w, h, C_PANEL_LINE);
-
     int iy = y + MENU_HEADER_H;
+    int shown = 0;
     for (int i = 0; i < MENU_NUM; i++) {
         if (!menu_item_allowed(i)) continue;
         const struct menu_item *mi = &menu_items[i];
         if (mi->kind == 2) {
-            graphics_draw_string(x + 10, iy + 2, mi->label, C_TEXT_DIM);
-            graphics_fill_rect(x + 10, iy + MENU_SEC_H - 3, w - 20, 1, C_PANEL_LINE);
+            graphics_draw_string(x + 16, iy + 3, mi->label, C_MUTED);
+            graphics_fill_rect(x + 16, iy + MENU_SEC_H - 4, w - 32, 1, C_STROKE);
             iy += MENU_SEC_H;
             continue;
         }
         bool hov = (i == menu_hover) ||
                    (menu_hover < 0 && i == menu_keyboard_index);
         if (hov) {
-            graphics_fill_rect(x + 1, iy, w - 2, MENU_ITEM_H, C_BTN_HOVER);
-            graphics_fill_rect(x + 1, iy, 2, MENU_ITEM_H, C_ACTIVE);
+            graphics_fill_rounded_rect(x + 6, iy + 1, w - 12, MENU_ITEM_H - 2, 8,
+                                       C_BTN_HOVER);
+            graphics_fill_rounded_rect(x + 6, iy + 7, 2, MENU_ITEM_H - 14, 1,
+                                       C_ACTIVE);
         }
         if (mi->kind == 0) {
             int slot = mi->arg;
-            draw_app_icon(x + 8, iy + (MENU_ITEM_H - 14) / 2, 14, slot);
+            draw_app_icon(x + 14, iy + (MENU_ITEM_H - 16) / 2, 16, slot);
         } else {
-            session_glyph(mi->arg, x + 8, iy + (MENU_ITEM_H - 24) / 2, hov ? 0xFFFFFFFF : C_TEXT_DIM);
+            session_glyph(mi->arg, x + 14, iy + (MENU_ITEM_H - 24) / 2,
+                          hov ? 0xFFFFFFFF : C_TEXT_DIM);
         }
-        graphics_draw_string(x + 30, iy + (MENU_ITEM_H - 16) / 2, mi->label,
+        graphics_draw_string(x + 40, iy + (MENU_ITEM_H - 16) / 2, mi->label,
                              hov ? 0xFFFFFFFF : C_TEXT);
+        if (hov) draw_text_right(x + w - 18, iy + (MENU_ITEM_H - 16) / 2,
+                                 "open", C_TEXT_DIM);
         iy += MENU_ITEM_H;
+        shown++;
+    }
+    if (shown == 0) {
+        graphics_draw_string(x + 16, iy + 14, "No apps match that search", C_TEXT_DIM);
+        graphics_draw_string(x + 16, iy + 34, "Backspace to clear", C_MUTED);
     }
 }
 
@@ -2349,7 +2839,14 @@ static void gui_damage_tray(void) {
 static void gui_damage_menu(void) {
     int x, y, w, h;
     menu_geom(&x, &y, &w, &h);
-    gui_damage(x, y, w, h);
+    struct tb_layout L;
+    taskbar_compute(&L);
+    /* Filtering shrinks the menu, which moves its top edge down. Repainting
+     * only the new rect would leave the previous, taller menu on screen, so
+     * damage the whole column the menu can occupy instead. */
+    gui_damage(x, 0, w, L.card_y);
+    (void)y;
+    (void)h;
 }
 
 /* The cursor is a layer of its own: damage both where it was and where it is
@@ -2398,7 +2895,7 @@ static void gui_paint_region(int rx, int ry, int rw, int rh) {
                            b->width + WIN_SHADOW_EXTENT,
                            b->height + WIN_SHADOW_EXTENT))
             continue;
-        gui_draw_window(&windows[i]);
+        gui_draw_window(&windows[i], i);
         gui_draw_window_content(&windows[i]);
     }
 
@@ -2408,12 +2905,34 @@ static void gui_paint_region(int rx, int ry, int rw, int rh) {
         if (rect_overlaps(rx, ry, rw, rh, 0, sh - PANEL_H, sw, PANEL_H))
             gui_draw_panel();
     }
-    if (start_menu_open && !gui_fullscreen_active()) {
+    bool full = gui_fullscreen_active();
+    if (start_menu_open && !full) {
         int mx, my, mw, mh;
         menu_geom(&mx, &my, &mw, &mh);
         if (rect_overlaps(rx, ry, rw, rh, mx, my, mw, mh))
             gui_draw_start_menu();
     }
+    if (quick_open && !full) {
+        int qx, qy;
+        quick_geom(&qx, &qy);
+        if (rect_overlaps(rx, ry, rw, rh, qx, qy, QS_W, QS_H))
+            gui_draw_quick();
+    }
+    if (desktop_menu_open && !full) {
+        int dx, dy, dw, dh;
+        desktop_menu_geom(&dx, &dy, &dw, &dh);
+        if (rect_overlaps(rx, ry, rw, rh, dx, dy, dw, dh))
+            gui_draw_desktop_menu();
+    }
+    if (snap_preview && !full) gui_draw_snap_preview();
+    if (!full) {
+        if (notice_count > 0 &&
+            rect_overlaps(rx, ry, rw, rh, (int)graphics_get_width() - NOTICE_W - 34,
+                          6, NOTICE_W + 40, notice_count * (NOTICE_H + NOTICE_GAP) + 20))
+            gui_draw_notices();
+    }
+    if (alt_tab_open && !full) gui_draw_alt_tab();
+    if (about_open) gui_draw_about();
     if (save_dialog_active) gui_draw_save_dialog();
 
     graphics_end_frame();
@@ -2493,9 +3012,18 @@ void gui_redraw(void) {
 bool gui_needs_redraw(void) { return redraw_pending; }
 
 void gui_toggle_start_menu(void) {
+    bool had_overlay = quick_open || desktop_menu_open;
     start_menu_open = !start_menu_open;
     menu_hover = -1;
+    menu_query_len = 0;
+    menu_query[0] = '\0';
+    menu_caret_on = true;
     menu_keyboard_index = start_menu_open ? 1 : -1;
+    if (start_menu_open) {
+        quick_open = false;
+        desktop_menu_open = false;
+    }
+    if (had_overlay) gui_damage_all();
     /* The menu anchors to the launcher button, so both halves repaint. */
     gui_damage_menu();
     gui_damage_taskbar();
@@ -2518,6 +3046,108 @@ static int desktop_icon_at(int x, int y) {
             return slot;
     }
     return -1;
+}
+
+static void gui_damage_titlebar(int idx) {
+    if (idx < 0 || idx >= MAX_WINDOWS) return;
+    const struct gui_rect *r = &windows[idx].bounds;
+    int x = r->x + r->width - 3 * BTN_W - 12;
+    if (x < r->x) x = r->x;
+    gui_damage(x, r->y, r->width - (x - r->x), TITLEBAR_H);
+}
+
+static void gui_update_ctrl_hover(void) {
+    int old = hover_ctrl_window;
+    int nh = -1, nk = 0;
+    for (int zi = 0; zi < zcount; zi++) {
+        int i = zorder[zi];
+        struct gui_window *w = &windows[i];
+        if (!w->visible || w->minimized || w->fullscreen) continue;
+        struct gui_rect r = w->bounds;
+        if (mouse_x < r.x || mouse_x >= r.x + r.width ||
+            mouse_y < r.y || mouse_y >= r.y + TITLEBAR_H) continue;
+        int bx = r.x + r.width - 3 * BTN_W - 1;
+        if (mouse_x >= bx + 2 * BTN_W) nk = 3;
+        else if (mouse_x >= bx + BTN_W) nk = 2;
+        else if (mouse_x >= bx) nk = 1;
+        nh = i;
+        break;
+    }
+    if (nh == hover_ctrl_window && nk == hover_ctrl_kind) return;
+    if (old >= 0) gui_damage_titlebar(old);
+    if (nh >= 0) gui_damage_titlebar(nh);
+    hover_ctrl_window = nh;
+    hover_ctrl_kind = nk;
+}
+
+static void gui_update_icon_hover(void) {
+    int slot = -1;
+    if (!gui_fullscreen_active() && mouse_y < (int)graphics_get_height() - PANEL_H)
+        slot = desktop_icon_at(mouse_x, mouse_y);
+    if (slot == hover_icon) return;
+    hover_icon = slot;
+    /* Icon tiles are small, so repainting the whole cached desktop is cheap
+     * only on a theme change; damage each tile instead. */
+    for (int i = 0; i < desktop_icon_count && i < DESKTOP_ICON_MAX; i++)
+        gui_damage(desktop_icon_positions[i].x - 10,
+                   desktop_icon_positions[i].y - 10, 92, 102);
+}
+
+static void gui_apply_theme(int theme) {
+    if (theme < 0 || theme > GUI_THEME_SOLIS_UI_ENGINE) return;
+    setup_set_theme(theme);
+    gui_set_theme(theme);
+    gui_notify("Appearance", "Desktop theme updated");
+}
+
+static void gui_toggle_show_desktop(void) {
+    bool any = false;
+    for (int i = 0; i < MAX_WINDOWS; i++)
+        if (windows[i].visible && !windows[i].minimized) any = true;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (!windows[i].visible) continue;
+        if (any) {
+            if (!windows[i].minimized) gui_minimize_window(i);
+        } else if (windows[i].minimized) {
+            gui_restore_window(i);
+        }
+    }
+}
+
+static int gui_snap_zone(int mx, int my) {
+    int sw = (int)graphics_get_width();
+    int sh = (int)graphics_get_height();
+    bool top = my <= SNAP_DIST;
+    bool bottom = my >= sh - PANEL_H - SNAP_DIST;
+    bool left = mx <= SNAP_DIST;
+    bool right = mx >= sw - SNAP_DIST;
+    if (top && left) return 4;
+    if (top && right) return 5;
+    if (bottom && left) return 6;
+    if (bottom && right) return 7;
+    if (top) return 1;
+    if (left) return 2;
+    if (right) return 3;
+    return 0;
+}
+
+static struct gui_rect gui_snap_bounds(int zone) {
+    int sw = (int)graphics_get_width();
+    int sh = (int)graphics_get_height();
+    int wh = sh - PANEL_H;
+    struct gui_rect r;
+    r.x = 0; r.y = 0; r.width = sw; r.height = wh;
+    switch (zone) {
+        case 2: r.width = sw / 2; break;
+        case 3: r.x = sw / 2; r.width = sw - sw / 2; break;
+        case 4: r.width = sw / 2; r.height = wh / 2; break;
+        case 5: r.x = sw / 2; r.width = sw - sw / 2; r.height = wh / 2; break;
+        case 6: r.width = sw / 2; r.y = wh / 2; r.height = wh - wh / 2; break;
+        case 7: r.x = sw / 2; r.width = sw - sw / 2;
+                r.y = wh / 2; r.height = wh - wh / 2; break;
+        default: break;
+    }
+    return r;
 }
 
 void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
@@ -2544,6 +3174,25 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
         if (mouse_y >= sh) mouse_y = sh - 1;
         gui_damage_cursor(mouse_x, mouse_y);
     }
+    gui_update_ctrl_hover();
+    gui_update_icon_hover();
+
+    if (quick_open) {
+        int qh = quick_hit(mouse_x, mouse_y);
+        if (qh != quick_hover) {
+            int qx, qy;
+            quick_geom(&qx, &qy);
+            quick_hover = qh;
+            gui_damage_surface(qx, qy, QS_W, QS_H);
+        }
+    }
+    if (notice_count > 0) {
+        int nh = notice_at(mouse_x, mouse_y);
+        if (nh != notice_hover) {
+            notice_hover = nh;
+            gui_damage_notices();
+        }
+    }
 
     /* hover tracking: start menu */
     if (start_menu_open) {
@@ -2558,17 +3207,21 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
                         mouse_y >= L.launch_y && mouse_y < L.launch_y + L.launch_sz) ? 1 : 0;
         int new_pin = pin_at(mouse_x, mouse_y);
         int new_task = task_at(mouse_x, mouse_y);
+        int new_tray = (mouse_x >= L.tray_x - 4 &&
+                        mouse_x < L.tray_x + L.tray_w + 4) ? 1 : 0;
         if (new_logo != hover_logo) { hover_logo = new_logo; gui_damage_taskbar(); }
         if (new_pin != hover_pin) { hover_pin = new_pin; gui_damage_taskbar(); }
         if (new_task != hover_task) { hover_task = new_task; gui_damage_taskbar(); }
+        if (new_tray != tray_hover) { tray_hover = new_tray; gui_damage_tray(); }
     } else {
         /* Compare against -1 explicitly: hover_task and hover_pin use -1 for
          * "nothing hovered", and -1 is truthy as a C int. Treating it as
          * active repainted the whole taskbar on every mouse move. */
-        if (hover_logo || hover_task >= 0 || hover_pin >= 0) {
+        if (hover_logo || hover_task >= 0 || hover_pin >= 0 || tray_hover) {
             hover_logo = 0;
             hover_task = -1;
             hover_pin = -1;
+            tray_hover = 0;
             gui_damage_taskbar();
         }
     }
@@ -2593,6 +3246,20 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
         }
     }
 
+    /* Right-clicking empty desktop space opens the shell menu. */
+    if (right_click && drag_window < 0 && !gui_fullscreen_active() &&
+        mouse_y < py) {
+        start_menu_open = false;
+        quick_open = false;
+        desktop_menu_open = true;
+        desktop_menu_x = mouse_x;
+        desktop_menu_y = mouse_y;
+        desktop_menu_hover = -1;
+        gui_damage_all();
+        mouse_buttons = buttons;
+        return;
+    }
+
     /* continue dragging / resizing */
     if (left_down && drag_window >= 0) {
         struct gui_window *w = &windows[drag_window];
@@ -2612,13 +3279,42 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
                 w->bounds.y = ny;
                 gui_damage_union(&old, &w->bounds);
             }
+            int zone = gui_snap_zone(mouse_x, mouse_y);
+            if (zone) {
+                struct gui_rect nr = gui_snap_bounds(zone);
+                if (!snap_preview || snap_rect.x != nr.x ||
+                    snap_rect.y != nr.y || snap_rect.width != nr.width ||
+                    snap_rect.height != nr.height) {
+                    snap_preview = true;
+                    snap_zone = zone;
+                    snap_rect = nr;
+                    gui_damage_all();
+                }
+            } else if (snap_preview) {
+                snap_preview = false;
+                gui_damage_all();
+            }
         } else if (w->resizing) {
-            int nw = w->resize_ow + (mouse_x - w->resize_ox);
-            int nh = w->resize_oh + (mouse_y - w->resize_oy);
-            if (nw < MIN_WIN_W) nw = MIN_WIN_W;
-            if (nh < MIN_WIN_H) nh = MIN_WIN_H;
-            if (!(w->resize_flags & 1)) nw = w->resize_ow;
-            if (!(w->resize_flags & 2)) nh = w->resize_oh;
+            int dx = mouse_x - w->resize_ox;
+            int dy = mouse_y - w->resize_oy;
+            int nw = w->resize_ow, nh = w->resize_oh;
+            int nx = w->resize_obx, ny = w->resize_oby;
+            if (w->resize_flags & 1) nw = w->resize_ow + dx;
+            if (w->resize_flags & 4) nw = w->resize_ow - dx;
+            if (w->resize_flags & 2) nh = w->resize_oh + dy;
+            if (w->resize_flags & 8) nh = w->resize_oh - dy;
+            if (nw < MIN_WIN_W) {
+                if (w->resize_flags & 4) nx -= MIN_WIN_W - nw;
+                nw = MIN_WIN_W;
+            }
+            if (nh < MIN_WIN_H) {
+                if (w->resize_flags & 8) ny -= MIN_WIN_H - nh;
+                nh = MIN_WIN_H;
+            }
+            if (nx < 0) nx = 0;
+            if (ny < 0) ny = 0;
+            w->bounds.x = nx;
+            w->bounds.y = ny;
             w->bounds.width = nw;
             w->bounds.height = nh;
             gui_damage_union(&old, &w->bounds);
@@ -2635,19 +3331,20 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
         windows[idx].resizing = false;
         drag_window = -1;
         if (was_dragging && !windows[idx].maximized && !windows[idx].fullscreen) {
-            int sw = (int)graphics_get_width();
-            int sh = (int)graphics_get_height();
-            if (mouse_y <= SNAP_DIST) {
+            int zone = gui_snap_zone(mouse_x, mouse_y);
+            if (zone == 1) {
                 gui_toggle_maximize(idx);
-            } else if (mouse_x <= SNAP_DIST || mouse_x >= sw - SNAP_DIST) {
+            } else if (zone >= 2) {
                 struct gui_window *w = &windows[idx];
                 w->restore = w->bounds;
-                w->bounds.x = mouse_x <= SNAP_DIST ? 0 : sw / 2;
-                w->bounds.y = 0;
-                w->bounds.width = sw / 2;
-                w->bounds.height = sh - PANEL_H;
+                w->bounds = gui_snap_bounds(zone);
+                w->maximized = false;
                 gui_damage_all();
             }
+        }
+        if (snap_preview) {
+            snap_preview = false;
+            gui_damage_all();
         }
         /* The drop may have snapped the window to a new position. */
         gui_damage_window(idx);
@@ -2661,15 +3358,70 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     }
 
     /* ---- left click ---- */
+    int notice = notice_at(mouse_x, mouse_y);
+    if (notice >= 0) {
+        gui_dismiss_notice(notice);
+        mouse_buttons = buttons;
+        return;
+    }
+
+    if (about_open) {
+        about_open = false;
+        about_hover_close = 0;
+        gui_damage_all();
+        mouse_buttons = buttons;
+        return;
+    }
+
+    if (quick_open) {
+        int qh = quick_hit(mouse_x, mouse_y);
+        if (qh >= 0) {
+            if (qh == 1) {
+                gui_launch_app(SPX_SETTINGS);
+                quick_open = false;
+            } else if (qh == 2) {
+                logout_requested = true;
+                quick_open = false;
+            } else if (qh >= 10) {
+                gui_apply_theme(qh - 10);
+            }
+            gui_damage_all();
+            mouse_buttons = buttons;
+            return;
+        }
+        quick_open = false;
+        gui_damage_all();
+    }
+
+    if (desktop_menu_open) {
+        int item = desktop_menu_at(mouse_x, mouse_y);
+        if (item >= 0) {
+            desktop_menu_open = false;
+            if (item == 0) gui_launch_app(SPX_TERMINAL);
+            else if (item == 1) gui_launch_app(SPX_FILEBROWSER);
+            else if (item == 2) gui_launch_app(SPX_SETTINGS);
+            else if (item == 3) gui_apply_theme((gui_theme + 1) % 9);
+            else if (item == 4) about_open = true;
+            else if (item == 5) { bg_cache_invalidate(); gui_damage_all(); }
+            gui_damage_all();
+            mouse_buttons = buttons;
+            return;
+        }
+        desktop_menu_open = false;
+        gui_damage_all();
+    }
+
     if (start_menu_open) {
         int mx, my, mw, mh;
         menu_geom(&mx, &my, &mw, &mh);
         if (mouse_x >= mx && mouse_x < mx + mw && mouse_y >= my && mouse_y < my + mh) {
             int item = menu_item_at(mouse_x, mouse_y);
-            if (item >= 0) menu_activate(item);
-            start_menu_open = false;
-            /* The menu disappears and whatever it covered has to come back. */
-            gui_damage_menu();
+            if (item >= 0) {
+                menu_activate(item);
+                start_menu_open = false;
+                /* The menu disappears and whatever it covered has to come back. */
+                gui_damage_menu();
+            }
             mouse_buttons = buttons;
             return;
         }
@@ -2717,6 +3469,28 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
 
         gui_focus_window(i);
 
+        /* All four edges and both lower corners resize; the outer 3px of
+         * the top edge does too, above the titlebar drag zone. */
+        int flags = 0;
+        if (mouse_x >= r.x + r.width - RESIZE_MARGIN) flags |= 1;
+        if (mouse_x <= r.x + RESIZE_MARGIN) flags |= 4;
+        if (mouse_y >= r.y + r.height - RESIZE_MARGIN) flags |= 2;
+        if (mouse_y <= r.y + 3) flags |= 8;
+        if (flags && !w->maximized) {
+            w->dragging = false;
+            w->resizing = true;
+            w->resize_flags = flags;
+            drag_window = i;
+            w->resize_ox = mouse_x;
+            w->resize_oy = mouse_y;
+            w->resize_obx = r.x;
+            w->resize_oby = r.y;
+            w->resize_ow = r.width;
+            w->resize_oh = r.height;
+            mouse_buttons = buttons;
+            return;
+        }
+
         if (mouse_y < r.y + TITLEBAR_H) {
             if (!w->maximized) {
                 uint32_t now = timer_get_ticks();
@@ -2736,27 +3510,13 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
                 w->drag_off_y = mouse_y - r.y;
             }
         } else {
-            int flags = 0;
-            if (mouse_x >= r.x + r.width - RESIZE_MARGIN) flags |= 1;
-            if (mouse_y >= r.y + r.height - RESIZE_MARGIN) flags |= 2;
-            if (flags && !w->maximized) {
-                w->dragging = false;
-                w->resizing = true;
-                w->resize_flags = flags;
-                drag_window = i;
-                w->resize_ox = mouse_x;
-                w->resize_oy = mouse_y;
-                w->resize_ow = r.width;
-                w->resize_oh = r.height;
-            } else {
-                const struct app_exports *app = spx_get_exports(w->app_id - 1);
-                if (app && app->handle_mouse) {
-                    int cx = r.x + WIN_BORDER;
-                    int cy = r.y + TITLEBAR_H;
-                    int cw = r.width - 2 * WIN_BORDER;
-                    int ch = r.height - TITLEBAR_H - WIN_BORDER;
-                    app->handle_mouse(cx, cy, cw, ch, mouse_x, mouse_y);
-                }
+            const struct app_exports *app = spx_get_exports(w->app_id - 1);
+            if (app && app->handle_mouse) {
+                int cx = r.x + WIN_BORDER;
+                int cy = r.y + TITLEBAR_H;
+                int cw = r.width - 2 * WIN_BORDER;
+                int ch = r.height - TITLEBAR_H - WIN_BORDER;
+                app->handle_mouse(cx, cy, cw, ch, mouse_x, mouse_y);
             }
         }
         mouse_buttons = buttons;
@@ -2766,13 +3526,25 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     if (!gui_fullscreen_active() && mouse_y < py) {
         int slot = desktop_icon_at(mouse_x, mouse_y);
         if (slot >= 0) {
-            console_write("[GUI] desktop launch: ");
-            console_write(app_icons[slot].name);
-            console_write("\n");
-            if (gui_launch_app(slot) < 0)
-                console_write("[GUI] No free window slot for desktop app\n");
+            uint32_t now = timer_get_ticks();
+            if (selected_icon == slot && (uint32_t)(now - icon_click_tick) < 25) {
+                console_write("[GUI] desktop launch: ");
+                console_write(app_icons[slot].name);
+                console_write("\n");
+                selected_icon = -1;
+                if (gui_launch_app(slot) < 0)
+                    console_write("[GUI] No free window slot for desktop app\n");
+            } else {
+                selected_icon = slot;
+                icon_click_tick = now;
+            }
+            gui_damage_all();
             mouse_buttons = buttons;
             return;
+        }
+        if (selected_icon >= 0) {
+            selected_icon = -1;
+            gui_damage_all();
         }
     }
 
@@ -2780,6 +3552,19 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
     if (!gui_fullscreen_active() && mouse_y >= py) {
         struct tb_layout L;
         taskbar_compute(&L);
+        if (mouse_x >= L.card_x + L.card_w - 7) {
+            gui_toggle_show_desktop();
+            mouse_buttons = buttons;
+            return;
+        }
+        if (mouse_x >= L.tray_x - 4) {
+            quick_open = !quick_open;
+            start_menu_open = false;
+            desktop_menu_open = false;
+            gui_damage_all();
+            mouse_buttons = buttons;
+            return;
+        }
         if (mouse_x >= L.launch_x && mouse_x < L.launch_x + L.launch_sz &&
             mouse_y >= L.launch_y && mouse_y < L.launch_y + L.launch_sz) {
             gui_toggle_start_menu();
@@ -2808,27 +3593,84 @@ void gui_handle_mouse(int32_t dx, int32_t dy, uint8_t buttons) {
 }
 
 void gui_handle_key(char key) {
+    if (alt_tab_open && !(key == '\t' && keyboard_is_alt_pressed())) {
+        alt_tab_open = false;
+        gui_damage_all();
+    }
+
     if (start_menu_open) {
         if (key == '\t') {
             menu_keyboard_step(1);
             return;
         }
+        if (key == 0x1b) {
+            if (menu_query_len > 0) {
+                menu_query_len = 0;
+                menu_query[0] = '\0';
+                menu_keyboard_index = menu_first_match();
+                gui_damage_menu();
+            } else {
+                start_menu_open = false;
+                menu_keyboard_index = -1;
+                gui_damage_menu();
+                gui_damage_taskbar();
+            }
+            return;
+        }
+        if (key == '\b') {
+            if (menu_query_len > 0) menu_query[--menu_query_len] = '\0';
+            menu_keyboard_index = menu_first_match();
+            gui_damage_menu();
+            return;
+        }
         if (key == '\n' || key == '\r') {
             int item = menu_keyboard_index;
+            if (menu_query_len > 0) item = menu_first_match();
+            if (item < 0 || !menu_item_allowed(item)) item = menu_first_match();
             start_menu_open = false;
             if (item >= 0) menu_activate(item);
             gui_damage_menu();
             gui_damage_taskbar();
             return;
         }
-    }
-    if (key == 0x1b) {
-        if (start_menu_open) {
-            start_menu_open = false;
-            menu_keyboard_index = -1;
+        if (key >= 32 && key < 127) {
+            if (menu_query_len < (int)sizeof(menu_query) - 1) {
+                menu_query[menu_query_len++] = key;
+                menu_query[menu_query_len] = '\0';
+            }
+            menu_keyboard_index = menu_first_match();
+            menu_hover = -1;
             gui_damage_menu();
             return;
         }
+    }
+
+    if (key == 0x1b) {
+        if (quick_open) {
+            quick_open = false;
+            gui_damage_all();
+            return;
+        }
+        if (desktop_menu_open) {
+            desktop_menu_open = false;
+            gui_damage_all();
+            return;
+        }
+        if (about_open) {
+            about_open = false;
+            gui_damage_all();
+            return;
+        }
+    }
+
+    /* Ctrl+Alt+T opens a terminal; Ctrl+Alt+L returns to the sign-in screen. */
+    if (keyboard_is_alt_pressed() && key == 0x14) {
+        gui_launch_app(SPX_TERMINAL);
+        return;
+    }
+    if (keyboard_is_alt_pressed() && key == 0x0c) {
+        logout_requested = true;
+        return;
     }
     /* Ctrl+Q closes every window without tearing down the desktop session. */
     if (key == 0x11) {
@@ -2854,6 +3696,9 @@ void gui_handle_key(char key) {
     }
     if (key == '\t' && keyboard_is_alt_pressed()) {
         gui_cycle_focus();
+        alt_tab_open = true;
+        alt_tab_until = timer_get_ticks() + 70;
+        gui_damage_all();
         return;
     }
     if (active_window < 0 || active_window >= MAX_WINDOWS) return;
@@ -2915,6 +3760,33 @@ void gui_tick(void) {
     if ((uint32_t)(now - last_tick) < 5) return;
     last_tick = now;
 
+    if (start_menu_open) {
+        bool on = ((now / 25) & 1) != 0;
+        if (on != menu_caret_on) {
+            menu_caret_on = on;
+            gui_damage_menu();
+        }
+    }
+    if (alt_tab_open && (int32_t)(alt_tab_until - now) <= 0) {
+        alt_tab_open = false;
+        gui_damage_all();
+    }
+    if (notice_count > 0) {
+        bool expired = false;
+        for (int i = 0; i < notice_count; ) {
+            if ((int32_t)(notices[i].expires - now) <= 0) {
+                for (int j = i + 1; j < notice_count; j++)
+                    notices[j - 1] = notices[j];
+                notice_count--;
+                expired = true;
+                if (i >= notice_count) break;
+            } else {
+                i++;
+            }
+        }
+        if (expired) gui_damage_notices();
+    }
+
     /* Pick up installs and uninstalls made while the desktop is idle. */
     if (++desktop_poll >= 10) {
         desktop_poll = 0;
@@ -2950,4 +3822,10 @@ bool gui_take_logout(void) {
     bool r = logout_requested;
     logout_requested = false;
     return r;
+}
+
+void gui_close_focused(void) {
+    if (active_window >= 0 && active_window < MAX_WINDOWS &&
+        windows[active_window].visible)
+        gui_close_window(active_window);
 }

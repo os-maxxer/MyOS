@@ -8,6 +8,7 @@
 #include <solis/net.h>
 #include <solis/setup.h>
 #include <solis/brand.h>
+#include <solis/buildinfo.h>
 #include <solis/audio.h>
 
 #define SIDEBAR_W 140
@@ -484,6 +485,9 @@ static void draw_about_tab(const struct layout *L) {
     graphics_draw_string(x + w/2 - 48, py, "Graphics: VBE 1024x768", 0xFF666666);
     py += 16;
     graphics_draw_string(x + w/2 - 44, py, "Font: 8x16 Bitmap", 0xFF666666);
+    py += 16;
+    graphics_draw_string(x + 12, py, "Build:", 0xFF888888);
+    graphics_draw_string(x + 72, py, sys_get_build_id(), 0xFFCCCCCC);
 }
 
 static int edition_text_width(const char *text) {

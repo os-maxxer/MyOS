@@ -27,6 +27,7 @@
 #include <solis/boot.h>
 #include <solis/doom.h>
 #include <solis/audio.h>
+#include <solis/buildinfo.h>
 
 extern char __frame_stage_start[];
 extern char __frame_stage_end[];
@@ -70,6 +71,14 @@ void __attribute__((noreturn)) kernel_panic(const char *message) {
 
 void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
     console_init();
+    /* First line after the console comes up: which image this is. Tools and
+     * screenshots can then be matched to a build instead of guessed at. */
+    console_write("[BUILD] \n");
+    console_write(solis_build_id);
+    console_write("\n");
+    console_write("SOLISBUILDID=");
+    console_write(solis_build_id);
+    console_write("\n");
     if (multiboot_magic != 0x36D76289) {
         kernel_panic("Invalid Multiboot2 boot magic");
     }
@@ -224,7 +233,10 @@ void kernel_main(uint32_t multiboot_magic, uintptr_t multiboot_info) {
                 }
 
                 int fk = keyboard_consume_func_key();
-                if (fk >= 1 && fk <= 10) {
+                if (fk == 4 && keyboard_is_alt_pressed()) {
+                    /* Alt+F4 closes the focused window. */
+                    gui_close_focused();
+                } else if (fk >= 1 && fk <= 10) {
                     console_write("[TRACE] FKEY ");
                     console_write_dec(fk);
                     console_write("\n");
